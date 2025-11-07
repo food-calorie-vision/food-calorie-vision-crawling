@@ -1,0 +1,36 @@
+# Virtual environments / IDE
+.venv/
+.env
+.idea/
+.vscode/
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-wheel-metadata/
+
+# Data outputs
+data/raw/
+data/filtered/
+data/splits/
+data/cache/
+
+# Labels and models
+labels/yolo*/
+labels/yolo_validated*/
+labels/export*/
+models/
+*.pt
+*.onnx
+
+# Logs / runs
+runs/
+wandb/
+logs/
+
+# OS noise
+.DS_Store
+Thumbs.db

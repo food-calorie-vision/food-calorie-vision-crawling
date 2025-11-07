@@ -1,0 +1,18 @@
+# Core
+requests==2.31.0
+beautifulsoup4==4.12.3
+pillow==10.3.0
+pandas==2.2.2
+numpy==1.26.4
+tqdm==4.66.4
+
+# Computer vision / detection
+ultralytics==8.1.0
+torch==2.2.1
+torchvision==0.17.1
+duckduckgo_search==5.3.0
+
+# Tooling / quality
+python-dotenv==1.0.1
+mypy==1.9.0
+ruff==0.4.2

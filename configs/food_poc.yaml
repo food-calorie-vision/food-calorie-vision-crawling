@@ -1,0 +1,39 @@
+# Base dataset config for PoC training
+
+project_name: food_poc
+
+dataset:
+  train_images: data/splits/train/images
+  train_labels: labels/yolo_validated/train
+  val_images: data/splits/val/images
+  val_labels: labels/yolo_validated/val
+  test_images: data/splits/test/images
+  test_labels: labels/yolo_validated/test
+  class_map: labels/meta/classes.yaml
+
+training:
+  model: yolov8n.pt
+  epochs: 50
+  batch_size: 16
+  img_size: 640
+  optimizer: SGD
+  lr0: 0.01
+  lrf: 0.01
+  weight_decay: 0.0005
+  patience: 10
+
+augmentation:
+  hsv_h: 0.015
+  hsv_s: 0.7
+  hsv_v: 0.4
+  flipud: 0.0
+  fliplr: 0.5
+  mosaic: 1.0
+
+logging:
+  output_dir: models/runs
+  metrics_file: models/runs/metrics.json
+  save_best_only: true
+
+notes: >
+  Update paths when generating actual splits. Use this file as the template for new datasets.
