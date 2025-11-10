@@ -33,10 +33,19 @@
 ---
 
 ## 파이프라인
-1. **이미지 크롤링** – `scripts/crawl_images.py`  
-   입력: `target_food.csv`의 클래스 목록, 예시 옵션 `--min_per_class 50 --max_per_class 300`
+1. **이미지 크롤링** – `scripts/crawl_images_playwright.py`  
+   - DuckDuckGo API 호출이 차단된 환경을 고려해 Playwright 기반 렌더링 방식만 유지합니다.  
+   - 설치: `pip install -r requirements.txt && playwright install chromium`  
+   - 시스템 의존성: `sudo playwright install-deps` 또는 `sudo apt-get install libnss3 libnspr4 libasound2t64`  
+   - **중요**: headless 모드에서는 이미지 탭 DOM이 제대로 렌더링되지 않아 `<img>` 태그를 찾지 못할 수 있으므로(특히 WSL·무헤드 리눅스 서버) 항상 `--show-browser` 옵션을 사용하고, 브라우저 런치는 `--no-sandbox` 플래그와 함께 수행됩니다.  
+   - **동적 클래스 탐색**: DuckDuckGo가 랜덤 문자열 클래스로 이미지를 감싸므로 JavaScript로 해당 div를 찾고 이미지 URL을 추출합니다.  
+   - **아이콘 필터링**: `.ico`, `favicon`, `/icon` URL은 제외하며, 다운로드 후 50x50 이하 이미지도 자동 삭제합니다.  
+   - `--min_per_class`는 전역 limit을 초과하지 않는 범위에서 실제 다운로드 목표 하한으로 적용되며, 부족분은 크롤 로그 `notes`에 `shortfall_*`로 기록됩니다.
 2. **전처리 / 중복 제거** – `scripts/dedup_filter.py`  
    해시·유사도 기반 중복 제거, 깨진 파일 필터링
+   
+   **아이콘 정리** – `scripts/remove_icons.py`  
+   기존에 다운로드된 작은 아이콘 파일(50x50 이하) 정리용 스크립트
 3. **초기 자동 라벨링** – `scripts/auto_label.py`  
    YOLO 모델로 박스·클래스·확률(score) 생성
 4. **반자동 검수** – Label Studio / CVAT  
@@ -49,6 +58,8 @@
 ### 실행 로그 및 run_id 규칙
 - 모든 자동화 작업은 `YYYYMMDD_<stage>_<seq>` 형식 run_id를 사용합니다. 예: `20250107_poc_a`.
 - 각 크롤링 결과 요약은 `data/meta/crawl_logs/<run_id>.json`으로 저장하고, 소스 및 라이선스 변경 사항은 `data/source_list.md`에 함께 기록합니다.
+- 동일한 run_id를 여러 번 실행하면 `history` 배열에 시도별 기록이 누적되고, `classes` 항목은 클래스별 최신 요약으로 병합됩니다.
+- 로그의 각 클래스 항목에는 실제 폴더명(`folder`)이 함께 기록되어 sanitize 충돌이나 수동 정리를 추적할 수 있습니다.
 - 실행한 스크립트와 옵션은 `AGENTS.md` 체크리스트와 `TODO.md` 진행상황에 반영해 추적합니다.
 
 ---
@@ -57,20 +68,25 @@
 ```
 project/
 |-- data/
-|   |-- raw/         # 크롤링 원본
-|   |-- filtered/    # 중복·저화질 제거본
-|   `-- splits/      # train/val/test
+|   |-- raw/                    # 크롤링 원본
+|   |   `-- <run_id>/           # 예: 20251107_set_1
+|   |       |-- 기장/           # 클래스별 폴더 (한글 클래스명 유지)
+|   |       |-- 보리/
+|   |       `-- 조/
+|   |-- filtered/               # 중복·저화질 제거본
+|   `-- splits/                 # train/val/test
 |-- labels/
-|   |-- yolo/        # YOLO txt 라벨
-|   `-- meta/        # 클래스 매핑·통계
-|-- models/          # 체크포인트(.pt)
+|   |-- yolo/                   # YOLO txt 라벨
+|   `-- meta/                   # 클래스 매핑·통계
+|-- models/                     # 체크포인트(.pt)
 |-- scripts/
-|   |-- crawl_images.py
+|   |-- crawl_images_playwright.py
+|   |-- remove_icons.py         # 아이콘 파일 정리 스크립트
 |   |-- dedup_filter.py
 |   |-- auto_label.py
 |   |-- export_to_yolo.py
 |   `-- train_yolo.py
-`-- notebooks/       # 실험용 Jupyter/Colab
+`-- notebooks/                  # 실험용 Jupyter/Colab
 ```
 
 ---
@@ -80,6 +96,9 @@ project/
 - Python 3.10 (가상환경 권장)
 - PyTorch + CUDA 12.x 환경
 - `pip install -r requirements.txt`
+- Playwright 기반 크롤러 사용 시:
+  - `playwright install chromium` (브라우저 바이너리 설치)
+  - `sudo playwright install-deps` 또는 `sudo apt-get install libnss3 libnspr4 libasound2t64` (시스템 의존성)
 - 선택: Label Studio 또는 CVAT 서버
 
 ### 기본 실행 예시
@@ -87,18 +106,17 @@ project/
 # 의존성 설치
 pip install -r requirements.txt
 
-# 이미지 크롤링 (dry-run 예시)
-python scripts/crawl_images.py \
+python scripts/crawl_images_playwright.py \
+  --run-id 20251107_set_1 \
   --classes 기장 보리 조 \
   --min_per_class 50 \
-  --max_per_class 100 \
-  --limit 30 \
-  --dry-run
+  --max_per_class 80 \
+  --delay 1.5 \
+  --show-browser \
+  --dry-run  # 테스트 시
 
-# PoC: 특정 클래스만 크롤링
-python scripts/crawl_images.py \
-  --classes 기장 보리 조 등 \
-  --min_per_class 50
+# 아이콘 파일 정리 (선택사항)
+python scripts/remove_icons.py data/raw/<run_id>
 
 # 전처리
 python scripts/dedup_filter.py \
