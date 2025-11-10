@@ -42,12 +42,22 @@
    - **아이콘 필터링**: `.ico`, `favicon`, `/icon` URL은 제외하며, 다운로드 후 50x50 이하 이미지도 자동 삭제합니다.  
    - `--min_per_class`는 전역 limit을 초과하지 않는 범위에서 실제 다운로드 목표 하한으로 적용되며, 부족분은 크롤 로그 `notes`에 `shortfall_*`로 기록됩니다.
 2. **전처리 / 중복 제거** – `scripts/dedup_filter.py`  
-   해시·유사도 기반 중복 제거, 깨진 파일 필터링
+   - 입력: `--input data/raw/<run_id>` (클래스별 폴더 구조 유지)  
+   - 출력: `data/filtered/<run_id>/<class_name>`에 정확히 동일한 파일을 제외한 버전이 복사됩니다.  
+   - 현재 버전은 해시 기반(sha256) 완전 중복만 제거하며, 실행 결과 요약을 `data/filtered/<run_id>/stats.yaml`에 기록합니다(클래스별 input/kept/dropped 및 duplicates 목록 포함).  
+   - `--dry-run`으로 어떤 파일이 중복인지 확인만 할 수 있고, 동일한 run_id로 여러 번 돌려도 stats가 최신 상태로 갱신됩니다.
    
    **아이콘 정리** – `scripts/remove_icons.py`  
    기존에 다운로드된 작은 아이콘 파일(50x50 이하) 정리용 스크립트
 3. **초기 자동 라벨링** – `scripts/auto_label.py`  
-   YOLO 모델로 박스·클래스·확률(score) 생성
+   - 입력: `--images data/filtered/<run_id>` (필터링 완료본)  
+   - 프로젝트 표준은 **YOLOv11 Large (`yolo11l.pt`)**이며, 기본 경로(`models/yolo11l.pt`)에 파일이 없으면 스크립트가 다운로드 안내를 출력합니다. 필요 시 `--weights`로 다른 경로를 지정할 수 있습니다.
+   - 추론 결과는 `labels/yolo/<run_id>/...` 구조에 YOLO txt로 저장됩니다.  
+   - 모든 박스는 YOLO 포맷(`class_id x_center y_center width height`)으로 저장되며, per-detection confidence는 `labels/meta/<run_id>_predictions.csv`에 기록됩니다.  
+   - 이미지별 최대 confidence가 `--review-threshold`보다 낮거나 검출이 없으면 `labels/meta/review_queue.csv`에 run_id/이유를 append해 수동 검수 대기열을 유지합니다.  
+   - 검수 전 샘플 확인이 필요하면 `python scripts/visualize_predictions.py --run-id <run_id> --top-n 2 --bottom-n 3`을 실행해 고신뢰/저신뢰 이미지를 `labels/viz/<run_id>/`에 렌더링할 수 있습니다.
+   - Label Studio/CVAT에서 사람이 수정한 이미지의 라벨만 활용하려면, GUI export 결과를 `labels/yolo_validated/<run_id>`로 저장하거나 `python scripts/filter_labels.py --labels labels/yolo/<run_id> --keep-ids <ids> --remap-id <new_id>`로 검수된 클래스만 남깁니다.
+   - `--batch-size`, `--device`, `--confidence`, `--iou` 등 YOLO 옵션을 CLI에서 조정할 수 있습니다.
 4. **반자동 검수** – Label Studio / CVAT  
    자동 생성 결과를 불러와 수정·삭제·추가 수행
 5. **모델 학습** – `scripts/train_yolo.py`  
@@ -84,6 +94,9 @@ project/
 |   |-- remove_icons.py         # 아이콘 파일 정리 스크립트
 |   |-- dedup_filter.py
 |   |-- auto_label.py
+|   |-- visualize_predictions.py  # 상/하위 confidence 샘플 시각화
+|   |-- package_label_data.py     # Label Studio/CVAT 로컬 스토리지용 폴더 export 생성
+|   |-- filter_labels.py          # 라벨 ID 필터/재매핑
 |   |-- export_to_yolo.py
 |   `-- train_yolo.py
 `-- notebooks/                  # 실험용 Jupyter/Colab
@@ -96,6 +109,7 @@ project/
 - Python 3.10 (가상환경 권장)
 - PyTorch + CUDA 12.x 환경
 - `pip install -r requirements.txt`
+- Ultralytics YOLO 가중치(`yolo11l.pt` 등)를 `models/` 디렉터리에 두거나, `--weights`로 직접 경로를 지정하세요. 파일이 없으면 스크립트가 다운로드 안내를 출력합니다.
 - Playwright 기반 크롤러 사용 시:
   - `playwright install chromium` (브라우저 바이너리 설치)
   - `sudo playwright install-deps` 또는 `sudo apt-get install libnss3 libnspr4 libasound2t64` (시스템 의존성)
@@ -118,16 +132,114 @@ python scripts/crawl_images_playwright.py \
 # 아이콘 파일 정리 (선택사항)
 python scripts/remove_icons.py data/raw/<run_id>
 
-# 전처리
+# 전처리 (완전 중복 제거 + stats.yaml 생성)
 python scripts/dedup_filter.py \
-  --input data/raw \
-  --output data/filtered
+  --input data/raw/<run_id> \
+  --output data/filtered/<run_id>
 
 # 자동 라벨링
 python scripts/auto_label.py \
-  --images data/filtered \
-  --weights models/base_yolo.pt \
-  --out labels/yolo
+  --images data/filtered/<run_id> \
+  --out labels/yolo/<run_id> \
+  --confidence 0.4 \
+  --review-threshold 0.3 \
+  --device 0  # 또는 cpu
+
+# Label Studio/CVAT 로컬 스토리지 export 생성 (zip 필요 없음)
+python scripts/package_label_data.py \
+  --run-id <run_id> \
+  --images data/filtered/<run_id> \
+  --overwrite  # 기존 export/<run_id> 폴더가 있다면 덮어쓰기
+
+# export 결과를 Label Studio 데이터 루트로 이동 (예: rsync / cp)
+rsync -av data/exports/<run_id>/images/ /home/pollux/label-studio/data/local_storage/<run_id>/images/
+
+# 자동 라벨 JSON 생성 (Local Files 경로 기준 document root 지정)
+python scripts/export_labelstudio_json.py \
+  --run-id <run_id> \
+  --images data/filtered/<run_id> \
+  --labels labels/yolo/<run_id> \
+  --document-root "/data/local-files/?d=<run_id>/images/" \
+  --from-name label \
+  --to-name image \
+  --output data/exports/<run_id>/labelstudio.json
+
+# (선택) 숫자 ID를 실제 라벨명으로 매핑
+cat <<'EOF' > data/meta/label_map.csv
+45,국밥
+EOF
+python scripts/export_labelstudio_json.py \
+  --run-id <run_id> \
+  --images data/filtered/<run_id> \
+  --labels labels/yolo/<run_id> \
+  --document-root "/data/local-files/?d=<run_id>/images/" \
+  --label-map data/meta/label_map.csv \
+  --output data/exports/<run_id>/labelstudio.json
+
+`--document-root`에는 `/data/local-files/?d=<run_id>/images/`처럼 STORAGE 경로에
+맞는 하위 폴더까지 포함시켜 주세요. 여러 run을 같은 프로젝트에서 관리하거나
+특수한 경로 매핑이 필요한 경우 `{path}` 플레이스홀더를 활용할 수도 있습니다.
+예: `--document-root "/data/local-files/?d=<run_id>/images/{path}"`.
+
+# Label Studio UI에서 수동으로 프로젝트/스토리지 구성
+docker run --rm -it -p 8080:8080 \
+  -e LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true \
+  -e LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT=/label-studio/data/local_storage \
+  -v /home/pollux/label-studio/data:/label-studio/data \
+  heartexlabs/label-studio:latest \
+  label-studio start --no-browser --username admin --password admin
+
+1. 브라우저에서 Label Studio 접속 → 새 프로젝트 생성
+2. Settings → Storage → Add Local files → Path에 `/label-studio/data/local_storage/<run_id>/images`
+   입력 후 저장 → “Sync storage” 실행
+3. Data → Import에서 `data/exports/<run_id>/labelstudio.json` 업로드
+   (pre-annotation으로 자동 라벨 박스가 붙습니다)
+
+Labeling Interface 탭에는 최소 아래 템플릿을 붙여 주세요. `<RectangleLabels name="label" toName="image">`
+와 `<Image name="image" value="$image"/>` 구조가 스크립트 기본값과 직접 연결됩니다.
+
+```xml
+<View>
+  <Image name="image" value="$image"/>
+  <RectangleLabels name="label" toName="image">
+    <Label value="국밥" background="#FFB020"/>
+    <Label value="삼각김밥" background="#2A9D8F"/>
+    <!-- 필요한 클래스만큼 Label을 추가 -->
+  </RectangleLabels>
+</View>
+```
+
+Label Studio의 기본 템플릿(`<Image name="image">`, `<RectangleLabels name="label">`)
+과 일치하도록 스크립트 기본값이 이미 설정되어 있으므로, 특별히 다른
+설정을 쓰지 않는다면 추가 옵션 없이 그대로 실행하면 됩니다.
+레이블 이름을 바꾼 경우에만 `--from-name`, `--to-name`을 맞춰 주고,
+숫자 ID 대신 사람이 읽을 수 있는 라벨명을 쓰고 싶을 때 `--label-map`
+CSV를 제공하면 됩니다. 가장 확실한 방법은 Label Studio에서 샘플을
+수동으로 라벨링 후 Export하여 JSON 구조를 확인하고 동일하게 맞추는 것입니다.
+
+검수가 끝나면 Label Studio Export(zip)를 `labels/yolo_validated/<run_id>/`
+같은 별도 폴더에 풀어 두고, `labels/`/`images/`/`classes.txt` 등을 그대로
+보관하세요. 이후 `scripts/filter_labels.py`로 COCO 기본 클래스(0~79)를 제거하고
+음식 클래스만 0~N-1로 재매핑한 뒤 학습 데이터로 사용할 수 있습니다.
+
+# 검수 전 샘플 시각화 (상/하위 confidence)
+python scripts/visualize_predictions.py \
+  --run-id <run_id> \
+  --top-n 2 \
+  --bottom-n 3
+
+# 검수된 클래스만 남기기 (예: YOLO ID 45 -> 0)
+python scripts/filter_labels.py \
+  --labels labels/yolo/<run_id> \
+  --keep-ids 45 \
+  --remap-id 0
+
+# COCO 0~79 ID 제거 후 음식 클래스(80+)를 0~N-1로 재매핑
+python scripts/filter_labels.py \
+  --labels labels/yolo_validated/<run_id>/labels \
+  --drop-below 80 \
+  --shift-offset 80 \
+  --output labels/food_only/<run_id>
 
 # 검수된 데이터로 학습
 python scripts/train_yolo.py \

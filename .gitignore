@@ -17,11 +17,13 @@ data/raw/
 data/filtered/
 data/splits/
 data/cache/
+data/exports/
 
 # Labels and models
 labels/yolo*/
 labels/yolo_validated*/
 labels/export*/
+labels/viz/
 models/
 *.pt
 *.onnx

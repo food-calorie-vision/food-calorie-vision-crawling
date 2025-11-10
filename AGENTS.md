@@ -42,18 +42,30 @@ LLM/agent collaborators use this guide together with `README.md` to keep work on
 - 아이콘 필터링: URL 레벨에서 `.ico`, `favicon`, `/icon` 제외, 다운로드 후 50x50 이하 이미지 자동 삭제
 
 ### 3.2 Deduplication and Filtering (`scripts/dedup_filter.py`)
-- Inputs: previously crawled folder, outputs to `data/filtered/<run_id>`.
-- Required checks: hash duplicates, perceptual similarity, broken/corrupt files, minimum resolution.
-- Emit `stats.yaml` capturing files kept/dropped plus reasons; link it in PR or task notes.
+- Inputs: `--input data/raw/<run_id>` (아이콘 정리 이후), outputs to `data/filtered/<run_id>`.
+- v1 기준으로 sha256 해시가 완전히 동일한 파일만 제거합니다. 퍼셉추얼 비교나 해상도 필터는 후속 버전에서 확장하세요.
+- 실행 시 `data/filtered/<run_id>/stats.yaml`이 생성되며 클래스별 input/kept/dropped 집계와 duplicate 목록을 포함하므로 PR/노트에 반드시 첨부합니다.
+- `--dry-run`으로 실제 복사 없이 중복 여부만 확인할 수 있습니다.
 
 ### 3.3 Auto Labeling (`scripts/auto_label.py`)
-- Use the current best checkpoint under `models/`.
-- Store predictions under `labels/yolo/<run_id>` with filenames matching `data/filtered`.
-- Export per-image confidences; mark low-confidence samples (`< threshold`) for manual review in `labels/meta/review_queue.csv`.
+- Inputs: `--images data/filtered/<run_id>`, `--weights` 기본값은 `models/yolo11l.pt`. 파일이 없으면 스크립트가 다운로드 안내를 출력하므로 가중치를 준비한 뒤 재실행합니다.
+- Outputs: YOLO txt 파일을 `labels/yolo/<run_id>/<relative_path>.txt`에 생성하고, per-detection 정보를 `labels/meta/<run_id>_predictions.csv`로 기록합니다.
+- `--review-threshold`보다 낮은 confidence만 검출되었거나 검출이 없는 이미지는 `labels/meta/review_queue.csv`에 run_id/이유/확신도를 append하여 반자동 검수 대기열을 유지합니다.
+- 검수 전 샘플 이미지를 확인하려면 `python scripts/visualize_predictions.py --run-id <run_id> --top-n 2 --bottom-n 3`으로 `labels/viz/<run_id>/`에 시각화를 생성합니다.
+- 특정 클래스 ID만 남기거나 COCO 기본 클래스(0~79)를 제거하고 싶다면 `scripts/filter_labels.py`를 사용하세요.
+  - 예시 1) `--keep-ids 45 --remap-id 0` : 45번만 남기고 0으로 재매핑.
+  - 예시 2) `--drop-below 80 --shift-offset 80` : 80번 이상의 음식 클래스만 남기고 80을 빼서 0~N-1로 재정렬.
+- `--confidence`, `--iou`, `--batch-size`, `--device`를 상황에 따라 조정하고, 사용한 가중치·옵션을 TODO/노트에 남깁니다.
 
 ### 3.4 Human Validation (Label Studio or CVAT)
 - Sync auto-labeled data into the chosen tool using project naming convention `food-<run_id>`.
-- After validation, export YOLO-format labels back into `labels/yolo_validated/<run_id>` and document reviewer notes.
+- Label Studio에서 Local Files를 쓸 때는 컨테이너 환경 변수 `LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true`,
+  `LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT=/label-studio/data/local_storage`를 반드시 설정하고,
+  Storage 경로는 `/label-studio/data/local_storage/<run_id>/images` 형태로 입력합니다.
+- Labeling Interface는 `<Image name="image" value="$image"/>` + `<RectangleLabels name="label" toName="image">` 구조를 기본으로 사용합니다.
+- JSON pre-annotation의 `data.image` 경로는 `/data/local-files/?d=<run_id>/images/...` 형태여야 하며,
+  Label Studio에서 샘플을 수동 라벨링 후 Export하여 구조를 검증한 뒤 가져오십시오.
+- After validation, export YOLO-format labels back into `labels/yolo_validated/<run_id>` (또는 새 폴더) and document reviewer notes.
 
 ### 3.5 Training and Active Learning (`scripts/train_yolo.py`)
 - Configs live under `configs/`; clone `configs/food_poc.yaml` when creating new datasets.

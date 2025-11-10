@@ -1,0 +1,53 @@
+{
+  "run_id": "crawl_test_b",
+  "timestamp": "2025-11-10T05:21:24.423635+00:00",
+  "classes": [
+    {
+      "name": "국밥",
+      "requested": 5,
+      "downloaded": 5,
+      "errors": 0,
+      "notes": "",
+      "folder": "국밥"
+    },
+    {
+      "name": "삼각김밥",
+      "requested": 5,
+      "downloaded": 5,
+      "errors": 0,
+      "notes": "",
+      "folder": "삼각김밥"
+    }
+  ],
+  "source": [
+    "duckduckgo_images_playwright"
+  ],
+  "notes": "",
+  "history": [
+    {
+      "timestamp": "2025-11-10T05:21:24.423635+00:00",
+      "classes": [
+        {
+          "name": "국밥",
+          "requested": 5,
+          "downloaded": 5,
+          "errors": 0,
+          "notes": "",
+          "folder": "국밥"
+        },
+        {
+          "name": "삼각김밥",
+          "requested": 5,
+          "downloaded": 5,
+          "errors": 0,
+          "notes": "",
+          "folder": "삼각김밥"
+        }
+      ],
+      "source": [
+        "duckduckgo_images_playwright"
+      ],
+      "notes": ""
+    }
+  ]
+}
