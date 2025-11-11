@@ -17,6 +17,24 @@
 3. Label Studio / CVAT 등을 활용한 반자동 검수로 라벨 품질을 확보합니다.
 4. 재학습과 Active Learning 루프를 통해 모델 성능을 지속적으로 개선합니다.
 
+### 클래스 매핑
+- `target_food.csv`를 수정하면 `food_class.csv`를 꼭 재생성하세요. 이 파일만이 `id,classes` 매핑의 단일 소스입니다.
+- 재생성 명령 예시(실행한 커맨드를 TODO/로그에 기록):
+  ```bash
+  UV_CACHE_DIR=.uv-cache uv run python - <<'PY'
+  from pathlib import Path
+  src = Path("target_food.csv")
+  lines = [line.strip() for line in src.read_text(encoding="utf-8").splitlines() if line.strip()]
+  dst = Path("food_class.csv")
+  with dst.open("w", encoding="utf-8") as fp:
+      fp.write("id,classes\n")
+      for idx, name in enumerate(lines):
+          fp.write(f"{idx},{name}\n")
+  print(f"Updated {dst} with {len(lines)} rows.")
+  PY
+  ```
+- 실험용 서브셋이 필요하면 `food_class_subset.csv`처럼 별도 파일을 만들고, `food_class.csv` 원본은 그대로 유지합니다. `label_map.csv`는 향후 특수 매핑용으로 남겨두고 현재 파이프라인에서는 사용하지 않습니다.
+
 ---
 
 ## 데이터 수집 전략
@@ -97,7 +115,7 @@ project/
 |   |-- visualize_predictions.py  # 상/하위 confidence 샘플 시각화
 |   |-- package_label_data.py     # Label Studio/CVAT 로컬 스토리지용 폴더 export 생성
 |   |-- filter_labels.py          # 라벨 ID 필터/재매핑
-|   |-- export_to_yolo.py
+|   |-- prepare_food_dataset.py   # 검수본 → 학습 데이터 패키징
 |   `-- train_yolo.py
 `-- notebooks/                  # 실험용 Jupyter/Colab
 ```
@@ -164,8 +182,8 @@ python scripts/export_labelstudio_json.py \
   --to-name image \
   --output data/exports/<run_id>/labelstudio.json
 
-# (선택) 숫자 ID를 실제 라벨명으로 매핑
-cat <<'EOF' > data/meta/label_map.csv
+# (선택) 특정 ID만 별도 CSV로 정리하고 싶은 경우
+cat <<'EOF' > food_class_subset.csv
 45,국밥
 EOF
 python scripts/export_labelstudio_json.py \
@@ -173,7 +191,7 @@ python scripts/export_labelstudio_json.py \
   --images data/filtered/<run_id> \
   --labels labels/yolo/<run_id> \
   --document-root "/data/local-files/?d=<run_id>/images/" \
-  --label-map data/meta/label_map.csv \
+  --label-map food_class_subset.csv \
   --output data/exports/<run_id>/labelstudio.json
 
 `--document-root`에는 `/data/local-files/?d=<run_id>/images/`처럼 STORAGE 경로에
@@ -222,6 +240,20 @@ CSV를 제공하면 됩니다. 가장 확실한 방법은 Label Studio에서 샘
 보관하세요. 이후 `scripts/filter_labels.py`로 COCO 기본 클래스(0~79)를 제거하고
 음식 클래스만 0~N-1로 재매핑한 뒤 학습 데이터로 사용할 수 있습니다.
 
+# 검수 결과를 음식 전용 데이터셋으로 패키징
+python scripts/prepare_food_dataset.py \
+  --run-id <run_id> \
+  --source labels/yolo_validated/<run_id> \
+  --label-map food_class.csv \
+  --val-ratio 0.2 \
+  --overwrite
+
+위 스크립트는 `labels/yolo_validated/<run_id>/images`, `labels/.../labels`
+구조를 `data/datasets/<run_id>/`로 복사하고, COCO 0~79 ID를 제거한 뒤
+자동으로 `classes.txt`, `<run_id>.yaml`, `train.txt`, `val.txt`를 생성합니다.
+`--val-ratio`를 지정하지 않으면 train/val 모두 전체 이미지 경로를 사용합니다.
+생성된 `<run_id>.yaml`은 `train_yolo.py` 또는 Ultralytics CLI에서 그대로 사용할 수 있습니다.
+
 # 검수 전 샘플 시각화 (상/하위 confidence)
 python scripts/visualize_predictions.py \
   --run-id <run_id> \
@@ -242,8 +274,11 @@ python scripts/filter_labels.py \
   --output labels/food_only/<run_id>
 
 # 검수된 데이터로 학습
-python scripts/train_yolo.py \
-  --data configs/food_poc.yaml
+UV_CACHE_DIR=.uv-cache uv run python scripts/train_yolo.py \
+  --run-id <run_id> \
+  --config configs/food_poc.yaml \
+  --model models/yolo11l.pt \
+  --device 0
 ```
 (명령어와 옵션은 실제 구현에 맞춰 조정하십시오.)
 
