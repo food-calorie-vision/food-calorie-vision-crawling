@@ -38,12 +38,13 @@ class ClassSummary:
     folder: str = ""
 
 
-def load_classes(csv_path: Path, limit: Optional[int] = None) -> List[str]:
+def load_classes(csv_path: Path, limit: Optional[int] = None, start_from: Optional[str] = None) -> List[str]:
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV file not found: {csv_path}")
 
     preferred_columns = ["class_name", "food_name", "name", "item", "food"]
     classes: List[str] = []
+    start_collecting = start_from is None  # start_from이 None이면 처음부터 수집
 
     with csv_path.open("r", encoding="utf-8-sig") as fp:
         reader = csv.DictReader(fp)
@@ -59,9 +60,22 @@ def load_classes(csv_path: Path, limit: Optional[int] = None) -> List[str]:
             if not class_name:
                 class_name = row.get(fallback_column, "").strip()
             if class_name:
-                classes.append(class_name)
-            if limit and len(classes) >= limit:
-                break
+                # start_from이 지정되었고 아직 시작하지 않았다면, 해당 클래스를 찾을 때까지 건너뛰기
+                if not start_collecting and start_from:
+                    if class_name == start_from:
+                        start_collecting = True
+                        logging.info("Starting from class: %s", class_name)
+                    else:
+                        continue  # 아직 시작 클래스를 찾지 못함
+                
+                if start_collecting:
+                    classes.append(class_name)
+                    if limit and len(classes) >= limit:
+                        break
+    
+    if start_from and not start_collecting:
+        logging.warning("Start class '%s' not found in CSV. Starting from beginning.", start_from)
+    
     if not classes:
         raise ValueError("No class names found in CSV.")
     return classes
@@ -287,6 +301,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id", dest="run_id", type=str, help="Run identifier (YYYYMMDD_stage_seq).")
     parser.add_argument("--delay", type=float, default=1.5, help="Delay between downloads (seconds).")
     parser.add_argument("--timeout", type=float, default=10.0, help="HTTP timeout per download.")
+    parser.add_argument("--start-from", dest="start_from", type=str, default=None, help="Start crawling from this class name (inclusive).")
     parser.add_argument(
         "--user-agent",
         type=str,
@@ -338,15 +353,29 @@ def collect_image_urls(
         page = context.new_page()
 
         try:
-            page.goto(target_url, wait_until="networkidle", timeout=load_timeout * 1000)
+            # networkidle이 너무 엄격할 수 있으므로 domcontentloaded로 변경하고 재시도 로직 추가
+            try:
+                page.goto(target_url, wait_until="domcontentloaded", timeout=load_timeout * 1000)
+            except (PlaywrightTimeoutError, Exception) as nav_exc:
+                # 네비게이션 에러 발생 시 재시도 (about:blank 리다이렉트 등 처리)
+                logging.warning("Navigation error for '%s' (retrying): %s", query, nav_exc)
+                try:
+                    page.wait_for_timeout(2000)
+                    page.goto(target_url, wait_until="domcontentloaded", timeout=load_timeout * 1000)
+                except Exception as retry_exc:
+                    logging.error("Failed to load DuckDuckGo page for '%s' after retry: %s", query, retry_exc)
+                    browser.close()
+                    return unique_urls
+            
             maybe_accept_consent(page)
             # 이미지가 로드될 시간을 줌
             page.wait_for_timeout(3000)
             # 초기 스크롤로 이미지 로드 유도
             page.mouse.wheel(0, 1000)
             page.wait_for_timeout(2000)
-        except PlaywrightTimeoutError as exc:
-            logging.warning("Timed out loading DuckDuckGo page for '%s': %s", query, exc)
+        except Exception as exc:
+            # 예상치 못한 에러 처리
+            logging.error("Unexpected error loading DuckDuckGo page for '%s': %s", query, exc)
             browser.close()
             return unique_urls
 
@@ -501,9 +530,11 @@ def main() -> None:
     logging.info("Run ID: %s", run_id)
     logging.info("Output directory: %s", out_dir)
 
-    selected_classes = args.classes or load_classes(args.csv)
+    selected_classes = args.classes or load_classes(args.csv, start_from=args.start_from)
     resolved_classes = resolve_safe_class_names(selected_classes)
     logging.info("Total classes available: %d", len(resolved_classes))
+    if args.start_from:
+        logging.info("Starting from class: %s", args.start_from)
 
     global_limit = args.limit
     total_downloaded = 0
