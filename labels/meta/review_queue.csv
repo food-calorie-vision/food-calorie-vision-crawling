@@ -1,0 +1,3 @@
+run_id,image_path,reason,max_conf,total_detections
+crawl_test_b,/home/pollux/workspace/food-calorie-vision-crawling/data/filtered/crawl_test_b/삼각김밥/삼각김밥_0001.jpg,no_detections,0.0000,0
+crawl_test_b,/home/pollux/workspace/food-calorie-vision-crawling/data/filtered/crawl_test_b/삼각김밥/삼각김밥_0003.jpg,no_detections,0.0000,0

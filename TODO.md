@@ -33,10 +33,12 @@ Tracked tasks for Food Calorie Vision Crawling. Keep this file current so every 
   - 파일시스템 안전성: 한글, 영문, 숫자, 언더스코어, 하이픈만 허용
 
 ### Phase 2 – Cleaning & Labeling
-- [ ] Implement `scripts/dedup_filter.py` (hash + perceptual dedupe, corrupt detection).
-- [ ] Produce the `stats.yaml` output format plus a sample file.
-- [ ] Implement `scripts/auto_label.py` with YOLO weights, confidence thresholds, and `labels/meta/review_queue.csv` export.
-- [ ] Document the Label Studio/CVAT import-export workflow (steps or screenshots).
+- [x] Implement `scripts/dedup_filter.py` (현재 버전: sha256 기반 완전 중복 제거 + 복사/보고서 생성).
+- [x] Produce the `stats.yaml` output format plus a sample 파일(`data/filtered/crawl_test_b/stats.yaml`).
+- [x] Implement `scripts/auto_label.py` with YOLO weights, confidence thresholds, per-detection CSV(`labels/meta/<run_id>_predictions.csv`), and review queue export(`labels/meta/review_queue.csv`).
+- [x] Document the Label Studio/CVAT import-export workflow (README `Label Studio` 섹션 + 인터페이스 템플릿/Local Files 가이드).
+- [x] Add `scripts/visualize_predictions.py` for 상·하위 신뢰도 샘플 시각화.
+- [x] Add `scripts/filter_labels.py` to keep/remap reviewed classes (post-GUI cleanup).
 
 ### Phase 3 – Training & Active Learning
 - [ ] Implement `scripts/train_yolo.py` to read dataset configs and store metrics/checkpoints.

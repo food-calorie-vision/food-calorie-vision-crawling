@@ -3,13 +3,8 @@
 project_name: food_poc
 
 dataset:
-  train_images: data/splits/train/images
-  train_labels: labels/yolo_validated/train
-  val_images: data/splits/val/images
-  val_labels: labels/yolo_validated/val
-  test_images: data/splits/test/images
-  test_labels: labels/yolo_validated/test
-  class_map: labels/meta/classes.yaml
+  dataset_yaml: data/datasets/{run_id}/{run_id}.yaml  # scripts/prepare_food_dataset.py 출력
+  notes: Update --run-id when launching train_yolo.py so the placeholder above resolves.
 
 training:
   model: yolov8n.pt

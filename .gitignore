@@ -4,6 +4,13 @@
 .idea/
 .vscode/
 
+# Cache directories
+.cache/
+.uv-cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
 # Python artifacts
 __pycache__/
 *.pyc
@@ -11,17 +18,23 @@ __pycache__/
 *.pyd
 .Python
 pip-wheel-metadata/
+*.egg-info/
+dist/
+build/
 
 # Data outputs
 data/raw/
 data/filtered/
 data/splits/
 data/cache/
+data/exports/
+data/datasets/
 
 # Labels and models
 labels/yolo*/
 labels/yolo_validated*/
 labels/export*/
+labels/viz/
 models/
 *.pt
 *.onnx
