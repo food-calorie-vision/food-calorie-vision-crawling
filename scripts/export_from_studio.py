@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -177,7 +178,6 @@ def package_dataset(
     if allow_overwrite:
         cmd.append("--overwrite")
     print(f"[prepare] {' '.join(cmd)}")
-    import subprocess
 
     subprocess.run(cmd, check=True)
 
