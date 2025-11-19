@@ -23,34 +23,22 @@ LLM/agent collaborators use this guide together with `README.md` to keep work on
 
 ## 3. Primary Workflows
 ### 3.0 Class Map Management
-- `target_food.csv`가 클래스 우선순위의 소스입니다. 내용이 바뀌면 아래 명령으로 `food_class.csv`를 재생성하고, 실행 로그에 사용한 커맨드를 적어 둡니다.
-  ```bash
-  UV_CACHE_DIR=.uv-cache uv run python - <<'PY'
-  from pathlib import Path
-  src = Path("target_food.csv")
-  lines = [line.strip() for line in src.read_text(encoding="utf-8").splitlines() if line.strip()]
-  dst = Path("food_class.csv")
-  with dst.open("w", encoding="utf-8") as fp:
-      fp.write("id,classes\n")
-      for idx, name in enumerate(lines):
-          fp.write(f"{idx},{name}\n")
-  print(f"Updated {dst} with {len(lines)} rows.")
-  PY
-  ```
-- `food_class.csv`는 `id,classes` 헤더를 가진 공식 라벨 매핑 테이블입니다. **모든** 라벨 패키징(`prepare_food_dataset.py`), 검수 export(`export_labelstudio_json.py`)는 이 파일을 참조합니다.
-- 추가 서브셋(예: 상위 N개 클래스만)이나 실험용 매핑이 필요하면 별도 CSV를 만들되, 원본 `food_class.csv`를 직접 수정하지 말고 PR/노트에 생성 명령을 기록하십시오.
+- `target_food.csv`가 클래스 우선순위의 소스입니다. **그러나** `food_class_pre_label.csv`, `food_class_after_label.csv`는 외부 파이프라인(전처리/라벨링)에서 공급하는 공식 매핑 파일이므로 이 저장소에서 재생성하거나 덮어쓰지 마십시오. 변경이 필요하면 최신 CSV를 받아 교체한 뒤 TODO/노트에 반영합니다.
+- `food_class_pre_label.csv`는 `id,classes` 헤더를 가진 공식 라벨 매핑 테이블입니다. **모든** 라벨 후처리(`postprocess_labels.py`)와 Label Studio export(`export_labelstudio_json.py`)는 이 파일을 참조합니다.
+- 검수 이후 학습 파이프라인에서 사용할 상위 카테고리 매핑은 `food_class_after_label.csv`입니다. 필요 시 별도 실험 CSV를 만들 수 있지만, 원본 두 파일은 그대로 유지하고 출처를 기록하십시오.
+- 전체 플로우가 필요하면 `scripts/pipeline_runner.py --run-id <run_id>`로 단계별 스크립트를 순차 실행할 수 있으며, `--steps`로 특정 단계만 지정할 수 있습니다. 명령어 모음이나 자동 실행이 필요하면 `python scripts/pipeline_runner.py --interactive`로 진입해 run_id를 설정(`/set run_id <값>`), `/help`로 번호 목록 확인, `/run <번호>`로 `COMMANDS.md`에 기록된 코드 블록을 현재 venv에서 바로 실행할 수 있습니다. `LABEL_STUDIO_TOKEN`처럼 환경 변수가 필요한 항목은 `/run` 시 값 입력을 요청하며, 실패한 명령은 해당 단계만 스킵하고 세션은 유지됩니다.
 
 ### 3.1 Data Crawling (`scripts/crawl_images_playwright.py`)
 - Read `target_food.csv`, select classes according to priority columns.
-- Generate a run_id before starting and reuse it for all outputs (`data/raw/<run_id>`, logs, labels).
-- Mandatory arguments: `--classes`, `--min_per_class`, `--max_per_class`, `--out data/raw/<run_id>`.
+- Generate a run_id before starting and reuse it for all outputs (`data/1_raw/<run_id>`, logs, labels).
+- Mandatory arguments: `--classes`, `--min_per_class`, `--max_per_class`, `--out data/1_raw/<run_id>`.
 - Respect robots.txt and add throttle or delay flags when available.
 - After each run, write a summary (`run_id`, class counts, error URLs) to `data/meta/crawl_logs/<run_id>.json`.
 - 동일한 run_id를 재실행하면 기존 JSON에 `history` 항목이 append되고 `classes` 요약이 병합되므로 데이터 손실 없이 누적할 수 있습니다.
 - Use `--limit` or `--dry-run` during testing to avoid large downloads and confirm CLI arguments.
 - Default source는 Playwright로 렌더링한 DuckDuckGo 이미지(`duckduckgo_images_playwright`); 다른 소스를 쓰면 `requirements.txt`와 문서를 업데이트하세요.
 - `--min_per_class`는 실제 다운로드 목표 하한으로 사용되며, 전역 limit 때문에 부족할 경우 `notes`에 shortfall이 표시됩니다.
-- **클래스별 폴더 생성**: 각 클래스는 `data/raw/<run_id>/<sanitized_class_name>/` 폴더에 저장됩니다. 한글 클래스명은 그대로 유지되며, 파일시스템에 안전하지 않은 문자만 제거됩니다.
+- **클래스별 폴더 생성**: 각 클래스는 `data/1_raw/<run_id>/<sanitized_class_name>/` 폴더에 저장됩니다. 한글 클래스명은 그대로 유지되며, 파일시스템에 안전하지 않은 문자만 제거됩니다.
 - 동일한 sanitize 결과가 충돌하는 경우 자동으로 `-2`, `-3` 접미사가 붙어 덮어쓰기를 방지합니다. 로그의 `folder` 필드를 참고하세요.
 - 설치: `pip install -r requirements.txt && playwright install chromium`, 필요 시 `sudo playwright install-deps`.
 - **Important**: DuckDuckGo 이미지 탭 DOM이 JavaScript로만 생성되기 때문에 headless 모드(WSL, 무헤드 서버 포함)에서는 `<img>` 태그가 로드되지 않을 수 있습니다. 항상 `--show-browser` 옵션을 켜고 실제 브라우저를 띄운 상태에서 스크롤을 수행하며, Chromium은 `--no-sandbox` 플래그와 함께 실행합니다.
@@ -60,22 +48,23 @@ LLM/agent collaborators use this guide together with `README.md` to keep work on
 - 아이콘 필터링: URL 레벨에서 `.ico`, `favicon`, `/icon` 제외, 다운로드 후 50x50 이하 이미지 자동 삭제
 
 ### 3.2 Deduplication and Filtering (`scripts/dedup_filter.py`)
-- Inputs: `--input data/raw/<run_id>` (아이콘 정리 이후), outputs to `data/filtered/<run_id>`.
+- Inputs: `--input data/1_raw/<run_id>` (아이콘 정리 이후), outputs to `data/2_filtered/<run_id>`.
 - v1 기준으로 sha256 해시가 완전히 동일한 파일만 제거합니다. 퍼셉추얼 비교나 해상도 필터는 후속 버전에서 확장하세요.
-- 실행 시 `data/filtered/<run_id>/stats.yaml`이 생성되며 클래스별 input/kept/dropped 집계와 duplicate 목록을 포함하므로 PR/노트에 반드시 첨부합니다.
+- 실행 시 `data/2_filtered/<run_id>/stats.yaml`이 생성되며 클래스별 input/kept/dropped 집계와 duplicate 목록을 포함하므로 PR/노트에 반드시 첨부합니다.
 - `--dry-run`으로 실제 복사 없이 중복 여부만 확인할 수 있습니다.
 
 ### 3.3 Auto Labeling (`scripts/auto_label.py`)
-- Inputs: `--images data/filtered/<run_id>`, `--weights` 기본값은 `models/yolo11l.pt`. 파일이 없으면 스크립트가 다운로드 안내를 출력하므로 가중치를 준비한 뒤 재실행합니다.
-- Outputs: YOLO txt 파일을 `labels/yolo/<run_id>/<relative_path>.txt`에 생성하고, per-detection 정보를 `labels/meta/<run_id>_predictions.csv`로 기록합니다.
-- `--review-threshold`보다 낮은 confidence만 검출되었거나 검출이 없는 이미지는 `labels/meta/review_queue.csv`에 run_id/이유/확신도를 append하여 반자동 검수 대기열을 유지합니다.
-- 검수 전 샘플 이미지를 확인하려면 `python scripts/visualize_predictions.py --run-id <run_id> --top-n 2 --bottom-n 3`으로 `labels/viz/<run_id>/`에 시각화를 생성합니다.
+- Inputs: `--images data/2_filtered/<run_id>`, `--weights` 기본값은 `models/yolo11l.pt`. 파일이 없으면 스크립트가 다운로드 안내를 출력하므로 가중치를 준비한 뒤 재실행합니다.
+- Outputs: YOLO txt 파일을 `labels/3-1_yolo_auto/<run_id>/<relative_path>.txt`에 생성하고, per-detection 정보를 `labels/3-2_meta/<run_id>_predictions.csv`로 기록합니다.
+- `--review-threshold`보다 낮은 confidence만 검출되었거나 검출이 없는 이미지는 `labels/3-2_meta/review_queue.csv`에 run_id/이유/확신도를 append하여 반자동 검수 대기열을 유지합니다.
+- 검수 전 샘플 이미지를 확인하려면 `python scripts/visualize_predictions.py --run-id <run_id> --top-n 2 --bottom-n 3`으로 `labels/3-3_viz/<run_id>/`에 시각화를 생성합니다.
 - 특정 클래스 ID만 남기거나 COCO 기본 클래스(0~79)를 제거하고 싶다면 `scripts/filter_labels.py`를 사용하세요.
   - 예시 1) `--keep-ids 45 --remap-id 0` : 45번만 남기고 0으로 재매핑.
   - 예시 2) `--drop-below 80 --shift-offset 80` : 80번 이상의 음식 클래스만 남기고 80을 빼서 0~N-1로 재정렬.
 - `--confidence`, `--iou`, `--batch-size`, `--device`를 상황에 따라 조정하고, 사용한 가중치·옵션을 TODO/노트에 남깁니다.
+- YOLO 추론 이후에는 **필수 후처리**로 각 이미지에서 가장 넓은 박스만 남기고, class_id를 폴더명(크롤 시 사용한 클래스) 기준으로 `food_class_pre_label.csv` ID로 덮어쓰십시오. `scripts/postprocess_labels.py --labels labels/3-1_yolo_auto/<run_id> --label-map food_class_pre_label.csv`를 사용하면 자동으로 처리되며, 이렇게 생성된 숫자 ID를 기반으로 `export_labelstudio_json.py --label-map <csv>`를 호출하면 Label Studio UI에는 국밥/삼각김밥 등 문자열이 표시됩니다.
 
-### 3.4 Human Validation (Label Studio or CVAT)
+### 3.4 Human Validation (Label Studio)
 - Sync auto-labeled data into the chosen tool using project naming convention `food-<run_id>`.
 - Label Studio에서 Local Files를 쓸 때는 컨테이너 환경 변수 `LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true`,
   `LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT=/label-studio/data/local_storage`를 반드시 설정하고,
@@ -83,9 +72,9 @@ LLM/agent collaborators use this guide together with `README.md` to keep work on
 - Labeling Interface는 `<Image name="image" value="$image"/>` + `<RectangleLabels name="label" toName="image">` 구조를 기본으로 사용합니다.
 - JSON pre-annotation의 `data.image` 경로는 `/data/local-files/?d=<run_id>/images/...` 형태여야 하며,
   Label Studio에서 샘플을 수동 라벨링 후 Export하여 구조를 검증한 뒤 가져오십시오.
-- After validation, export YOLO-format labels back into `labels/yolo_validated/<run_id>` (또는 새 폴더) and document reviewer notes.
-- 검수 결과를 학습용으로 정리하려면 `python scripts/prepare_food_dataset.py --run-id <run_id> --source labels/yolo_validated/<run_id> --label-map food_class.csv --val-ratio 0.2 --overwrite`로
-  이미지/라벨 복사 + COCO ID 제거 + train/val split 리스트 + data/datasets/<run_id> 구성까지 자동화할 수 있습니다.
+- After validation, export YOLO-format labels back into `labels/4_yolo_validated/<run_id>` (또는 새 폴더) and document reviewer notes.
+- 검수 결과를 학습용으로 정리하려면 `python scripts/prepare_food_dataset.py --run-id <run_id> --source labels/4_yolo_validated/<run_id> --label-map food_class_after_label.csv --val-ratio 0.2 --overwrite`로
+  이미지/라벨 복사 + COCO ID 제거 + train/val split 리스트 + data/5_datasets/<run_id> 구성까지 자동화할 수 있습니다.
 
 ### 3.5 Training and Active Learning (`scripts/train_yolo.py`)
 - 학습 파라미터는 `configs/food_poc.yaml`을 기본으로 하며, `dataset.dataset_yaml`에 `{run_id}` 플레이스홀더가 있으므로 `--run-id <run_id>`를 반드시 넘깁니다.
@@ -97,13 +86,33 @@ LLM/agent collaborators use this guide together with `README.md` to keep work on
     --model models/yolo11l.pt \
     --device 0
   ```
-  필요 시 `--data data/datasets/<run_id>/<run_id>.yaml`, `--epochs`, `--batch-size`, `--resume` 등을 덮어쓸 수 있습니다.
+  필요 시 `--data data/5_datasets/<run_id>/<run_id>.yaml`, `--epochs`, `--batch-size`, `--resume` 등을 덮어쓸 수 있습니다.
 - 학습 산출물은 기본적으로 `runs/train/<name>` 아래에 저장되고, `logging.metrics_file` 경로(기본: `models/runs/metrics.json`)에도 지표가 기록됩니다. run_id, config, 주요 하이퍼파라미터를 TODO/노트에 남깁니다.
 - Active Learning loop:
   1. Run inference on the unlabeled pool.
   2. Rank by uncertainty (entropy or low confidence).
   3. Push top-N images back to the validation queue.
   4. Repeat crawl -> filter -> label -> train steps.
+
+---
+
+### 3.6 Pull → Packaging → Training 흐름
+- `/run 9`(`export_from_studio.py`)는 Label Studio export를 `labels/4_export_from_studio/<run_id>/source`에 내려받기만 하고, 기본적으로 `--skip-dataset`이 켜져 있어 data/5_datasets/<run_id>는 건드리지 않습니다. 실제 패키징은 `/run 10`(`prepare_food_dataset.py` + `plan_train_subset.py`)에서 실행하며, 필요할 때만 `--allow-overwrite`를 추가해 새 데이터셋을 만들면 됩니다.
+- `/run 10`은 초기 패키징 전용이며, **항상 `--overwrite`**로 `data/5_datasets/<run_id>`를 재생성합니다. 검수된 source를 받아 train/val split을 만들고, 즉시 `plan_train_subset.py`를 호출해 `data/meta/<run_id>_exclude.txt`를 남깁니다. 이 단계에서 결정된 train/val 및 exclude가 baseline이므로 AL 라운드에서 그대로 재사용하세요.
+- `/run 11`을 실행할 때는 학습 대상 데이터셋을 명확히 선택하세요. 최초 학습이면 `data/5_datasets/<run_id>/<run_id>.yaml`을 쓰고, Active Learning 라운드라면 `/run 13`에서 생성한 버전(run_id에 `_r2` 등 suffix)을 지정해 검증 세트를 고정한 채 train만 갱신합니다.
+- `train_yolo.py`는 학습 종료 후 `data/meta/train_metrics/<run_id>_per_class.csv`와 `<run_id>_confusion_matrix.csv`를 자동으로 저장하므로 Notebook에서 pandas/matplotlib으로 취약 클래스를 선정하세요. 기존 자동 라벨 기반 분석 스크립트는 사용하지 않습니다.
+
+### 3.7 Packaging/Training/Active Learning 현황
+- Packaging(#10)은 최초에는 `--val-ratio`로 train/val split을 생성하고(`train.txt`, `val.txt` 확보), 이후 필요 시 `--val-list`, `--train-include`, `--train-exclude`를 추가해 manifest 기반 제어를 할 수 있습니다. 동일 파티션 내에서는 `--copy-mode hardlink`를 기본으로 사용하세요.
+- 학습 품질 평가는 `models/runs/<run_id>/results.csv`와 confusion matrix를 기준으로 진행하세요. `train_yolo.py`가 저장한 `data/meta/train_metrics/<run_id>_per_class.csv` 및 `_confusion_matrix.csv`를 `scripts/report_training_metrics.py`로 정렬하면 우선 검수 대상 클래스를 쉽게 선정할 수 있습니다. 기존 `scripts/analyze_class_performance.py`는 자동 라벨 predictions를 전제로 하므로 사용하지 않습니다.
+- Label Studio에 다시 태스크를 올릴 때는 기존 프로젝트를 재사용하되, `package_label_data.py`에서 클래스/manifest 필터를 통해 “이번 라운드에서 실제로 재검수할 이미지”만 export합니다. 재검수 우선순위는 `report_training_metrics.py`로 요약한 per-class CSV를 참고해 결정하세요.
+- 초기 패키징(#10) 이후에는 `scripts/plan_train_subset.py --run-id <run_id>`가 자동 실행되어 클래스별 이미지 수를 보여준 뒤, “모든 클래스에서 몇 장씩 제외할지” 한 번만 입력받아 `data/meta/<run_id>_exclude.txt`를 만듭니다. 기본적으로 `train.txt`는 수정하지 않으며, 필요 시 `--update-train`으로 갱신할 수 있습니다.
+- Active Learning 라운드 패키징은 COMMANDS.md의 13번 항목(Active Learning Packaging)을 사용하세요. `/set base_run_id <값>`으로 최초 run_id를 컨텍스트에 저장한 뒤 `/run 13`을 실행하면 val split을 고정한 채 train manifest를 구성합니다.
+- 기본적으로 `--train-exclude data/meta/{base_run_id}_exclude.txt`를 넘겨 초기 Packaging(#10)에서 만든 제외 목록을 그대로 재사용합니다. 라운드별로 추가 제외/포함이 필요하면 별도 manifest(`data/meta/{run_id}_include.txt` 등)를 만들고 명령어에 직접 추가하세요.
+- `/run 13`은 새 run의 `train.txt`가 이전 run과 동일하면 경고 후 사용자 확인을 요청합니다. 테스트 환경에서는 `y`로 통과할 수 있으나, 실제 운용에서는 의도하지 않은 중복 생성을 피하기 위해 주의하세요.
+- Training 단계(#11)는 아직 실행되지 않았으므로, 첫 학습 시 run_id, config, train/val manifest 경로, 제외 목록을 TODO/README에 기록하고, 동일 validation 세트를 재사용하십시오.
+- Active Learning 라운드 run_id를 `YYYYMMDD_al_rX`처럼 관리하고, 각 라운드의 train include/exclude manifest를 `data/meta/train_pool_roundX.txt` 등으로 남겨 traceability를 유지합니다. `/run 13`은 `/set base_run_id <...>`로 최초 validation 목록을 고정한 뒤 새 run_id(`{base}_r2` 등)를 생성해 train만 조정하도록 설계돼 있으므로, 학습 단계에서 원하는 버전을 명시적으로 선택해야 합니다.
+- Matplotlib 학습 곡선에서 한글 깨짐을 방지하기 위해 `models/font/NanumGothic.ttf`를 repo에 포함했고, `train_yolo.py`가 자동으로 등록합니다. 새로운 폰트를 쓰려면 동일 방식으로 파일을 교체하세요.
 
 ---
 
@@ -136,8 +145,14 @@ LLM/agent collaborators use this guide together with `README.md` to keep work on
 | `README.md` | Product-level overview, pipeline summary, roadmap |
 | `AGENTS.md` | (This file) execution standards for autonomous agents |
 | `target_food.csv` | Prioritized list of food classes |
-| `food_class.csv` | `target_food.csv` 기반 공식 ID↔이름 매핑 (자동 생성) |
+| `food_class_pre_label.csv` | `target_food.csv` 기반 YOLO/Label Studio용 ID↔이름 매핑 (자동 생성) |
+| `food_class_after_label.csv` | 검수 후 학습 카테고리 매핑 |
 | `data/source_list.md` | (Create/update) provenance and licensing log |
+| `data/meta/train_metrics/` | 학습 종료 후 자동 저장되는 per-class/혼동행렬 CSV (`report_training_metrics.py` 참조) |
 | `scripts/*.py` | Automation entry points (crawl, filter, label, export, train) |
+| `scripts/plan_train_subset.py` | 클래스별 train 제외량을 인터랙티브로 선택해 manifest 생성 |
+| `scripts/report_training_metrics.py` | 학습 결과 기반 클래스/혼동행렬 리포트 |
+| (미사용) `scripts/analyze_class_performance.py` | 과거 자동 라벨 기반 분석 스크립트 (현재 비활성) |
+| `python scripts/pipeline_runner.py --interactive` | (QA/데모 용도) `/set run_id`, `/help`, `/run <번호>`로 COMMANDS를 배치 실행 |
 
 Stay within these guardrails to keep every agent handoff predictable and auditable.
