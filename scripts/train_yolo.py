@@ -5,19 +5,22 @@ Train a YOLO model (Ultralytics) using the repository's standard config files.
 Usage example:
   python scripts/train_yolo.py \
     --config configs/food_poc.yaml \
-    --data data/datasets/crawl_test_b/crawl_test_b.yaml \
+    --data data/5_datasets/crawl_test_b/crawl_test_b.yaml \
     --run-id crawl_test_b \
     --model models/yolo11l.pt
 """
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import numpy as np
 import yaml
+from matplotlib import font_manager, pyplot as plt  # type: ignore
 
 YOLO_CONFIG_DIR = Path(".cache") / "ultralytics"
 YOLO_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -37,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--data",
         type=Path,
-        help="YOLO dataset YAML. If omitted, tries configs or data/datasets/<run-id>/<run-id>.yaml.",
+        help="YOLO dataset YAML. If omitted, tries configs or data/5_datasets/<run-id>/<run-id>.yaml.",
     )
     parser.add_argument("--run-id", help="Run identifier used for dataset inference and logging names.")
     parser.add_argument("--model", type=Path, help="Override model weights path from the config.")
@@ -77,7 +80,7 @@ def resolve_dataset_yaml(args: argparse.Namespace, cfg: Dict[str, Any], context:
         Path(render_value(dataset_cfg.get("dataset_yaml"), context)) if dataset_cfg.get("dataset_yaml") else None,
     ]
     if args.run_id:
-        default_ds = Path("data") / "datasets" / args.run_id / f"{args.run_id}.yaml"
+        default_ds = Path("data") / "5_datasets" / args.run_id / f"{args.run_id}.yaml"
         candidates.append(default_ds)
 
     for candidate in candidates:
@@ -86,7 +89,7 @@ def resolve_dataset_yaml(args: argparse.Namespace, cfg: Dict[str, Any], context:
 
     raise FileNotFoundError(
         "Dataset YAML not found. Pass --data, add dataset.yaml to the config, "
-        "or run scripts/prepare_food_dataset.py to generate data/datasets/<run-id>/<run-id>.yaml."
+        "or run scripts/prepare_food_dataset.py to generate data/5_datasets/<run-id>/<run-id>.yaml."
     )
 
 
@@ -163,7 +166,97 @@ def save_metrics(metrics: Any, path: Path) -> None:
         json.dump(serialize_metrics(metrics), fp, ensure_ascii=False, indent=2)
 
 
+def _normalize_name_mapping(names: Any) -> List[str]:
+    if not names:
+        return []
+    if isinstance(names, dict):
+        ordered = sorted(names.items(), key=lambda item: int(item[0]) if isinstance(item[0], (int, str)) and str(item[0]).isdigit() else item[0])
+        return [str(value) for _, value in ordered]
+    if isinstance(names, (list, tuple)):
+        return [str(value) for value in names]
+    return [str(names)]
+
+
+def resolve_class_names(trainer: Any, dataset_yaml: Path) -> List[str]:
+    names = _normalize_name_mapping(getattr(getattr(trainer, "data", None), "names", None))
+    if names:
+        return names
+    trainer_names = _normalize_name_mapping(getattr(trainer, "names", None))
+    if trainer_names:
+        return trainer_names
+    yaml_names: Sequence[str] = []
+    try:
+        with dataset_yaml.open("r", encoding="utf-8") as fp:
+            data = yaml.safe_load(fp) or {}
+        yaml_names = _normalize_name_mapping(data.get("names"))
+    except FileNotFoundError:
+        yaml_names = []
+    return list(yaml_names)
+
+
+def export_per_class_metrics(metrics: Any, class_names: Sequence[str], output_dir: Path, run_id: str) -> None:
+    box = getattr(metrics, "box", None)
+    if not box or not len(getattr(box, "p", [])):
+        print("[warn] Per-class metrics unavailable (missing precision/recall arrays).")
+        return
+    output_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = output_dir / f"{run_id}_per_class.csv"
+    rows: List[List[Any]] = []
+    for idx, class_name in enumerate(class_names):
+        try:
+            precision = float(box.p[idx])
+            recall = float(box.r[idx])
+            ap50 = float(box.ap50[idx])
+            ap5095 = float(box.ap[idx])
+        except Exception:
+            continue
+        rows.append([idx, class_name, precision, recall, ap50, ap5095])
+    if not rows:
+        print("[warn] Per-class metrics export skipped (no rows).")
+        return
+    with csv_path.open("w", encoding="utf-8", newline="") as fp:
+        writer = csv.writer(fp)
+        writer.writerow(["class_id", "class_name", "precision", "recall", "ap50", "ap50_95"])
+        writer.writerows(rows)
+    print(f"[metrics] Saved per-class metrics -> {csv_path}")
+
+
+def export_confusion_matrix(validator: Any, class_names: Sequence[str], output_dir: Path, run_id: str) -> None:
+    confusion_matrix = getattr(getattr(validator, "confusion_matrix", None), "matrix", None)
+    if confusion_matrix is None:
+        print("[warn] Confusion matrix unavailable; skipping export.")
+        return
+    matrix = np.asarray(confusion_matrix)
+    if matrix.ndim != 2:
+        print("[warn] Confusion matrix has unexpected shape; skipping export.")
+        return
+    output_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = output_dir / f"{run_id}_confusion_matrix.csv"
+    axis_size = matrix.shape[0]
+    if axis_size == len(class_names) + 1:
+        axis_names = list(class_names) + ["background"]
+    else:
+        axis_names = [f"class_{i}" for i in range(axis_size)]
+    header = ["true\\pred"] + axis_names
+    with csv_path.open("w", encoding="utf-8", newline="") as fp:
+        writer = csv.writer(fp)
+        writer.writerow(header)
+        for idx, row in enumerate(matrix):
+            row_name = axis_names[idx] if idx < len(axis_names) else f"class_{idx}"
+            writer.writerow([row_name] + [float(value) for value in row])
+    print(f"[metrics] Saved confusion matrix CSV -> {csv_path}")
+
+
 def main() -> None:
+    font_path = Path("models") / "font" / "NanumGothic.ttf"
+    if font_path.exists():
+        try:
+            font_manager.fontManager.addfont(str(font_path))
+            plt.rcParams["font.family"] = "NanumGothic"
+            os.environ.setdefault("ULTRALYTICS_FONT", str(font_path))
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] Failed to register NanumGothic font: {exc}")
+
     args = parse_args()
     cfg = load_yaml_config(args.config)
 
@@ -195,6 +288,19 @@ def main() -> None:
         metrics_path = Path(render_value(metrics_path_str, context)).resolve()
         save_metrics(metrics, metrics_path)
         print(f"[metrics] Saved metrics -> {metrics_path}")
+
+    trainer = getattr(model, "trainer", None)
+    reports_dir = Path("data") / "meta" / "train_metrics"
+    run_identifier = args.run_id or train_kwargs["name"]
+    if trainer:
+        class_names = resolve_class_names(trainer, dataset_yaml)
+        if class_names:
+            det_metrics = getattr(getattr(trainer, "validator", None), "metrics", None)
+            if det_metrics:
+                export_per_class_metrics(det_metrics, class_names, reports_dir, run_identifier)
+            export_confusion_matrix(getattr(trainer, "validator", None), class_names, reports_dir, run_identifier)
+        else:
+            print("[warn] Could not resolve class names; skipping per-class exports.")
 
     print("[done] Training run complete.")
 

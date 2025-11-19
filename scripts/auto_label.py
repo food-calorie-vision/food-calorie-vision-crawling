@@ -4,7 +4,7 @@ Auto-label filtered images using a YOLO model (Ultralytics).
 
 Outputs YOLO txt annotations mirroring the filtered images directory structure,
 stores per-detection confidences in a CSV, and appends low-confidence samples to
-labels/meta/review_queue.csv for manual inspection.
+labels/3-2_meta/review_queue.csv for manual inspection.
 """
 from __future__ import annotations
 
@@ -29,7 +29,11 @@ def parse_args() -> argparse.Namespace:
         default=str(DEFAULT_WEIGHTS),
         help="YOLO weights path (default: models/yolo11l.pt).",
     )
-    parser.add_argument("--out", type=Path, help="Root output dir for YOLO label txt files (default: labels/yolo/<run_id>).")
+    parser.add_argument(
+        "--out",
+        type=Path,
+        help="Root output dir for YOLO label txt files (default: labels/3-1_yolo_auto/<run_id>).",
+    )
     parser.add_argument("--run-id", type=str, help="Run identifier (defaults to images directory name).")
     parser.add_argument("--confidence", type=float, default=0.4, help="YOLO confidence threshold.")
     parser.add_argument("--iou", type=float, default=0.5, help="IOU threshold.")
@@ -51,12 +55,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--predictions-csv",
         type=Path,
-        help="Path to write per-detection CSV (default: labels/meta/<run_id>_predictions.csv).",
+        help="Path to write per-detection CSV (default: labels/3-2_meta/<run_id>_predictions.csv).",
     )
     parser.add_argument(
         "--review-csv",
         type=Path,
-        default=Path("labels") / "meta" / "review_queue.csv",
+        default=Path("labels") / "3-2_meta" / "review_queue.csv",
         help="Global review queue CSV path (appends rows when needed).",
     )
     parser.add_argument("--dry-run", action="store_true", help="Skip writing outputs/logging only.")
@@ -114,8 +118,8 @@ def main() -> None:
         raise FileNotFoundError(f"Images directory not found: {images_root}")
 
     run_id = args.run_id or images_root.name
-    labels_root = (args.out or (Path("labels") / "yolo" / run_id)).resolve()
-    predictions_csv = (args.predictions_csv or (Path("labels") / "meta" / f"{run_id}_predictions.csv")).resolve()
+    labels_root = (args.out or (Path("labels") / "3-1_yolo_auto" / run_id)).resolve()
+    predictions_csv = (args.predictions_csv or (Path("labels") / "3-2_meta" / f"{run_id}_predictions.csv")).resolve()
     review_csv = args.review_csv.resolve()
 
     logging.info("Run ID: %s", run_id)

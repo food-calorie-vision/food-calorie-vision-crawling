@@ -2,9 +2,9 @@
 """
 Visualize top/bottom confidence detections for quick QA.
 
-Reads labels/meta/<run_id>_predictions.csv, selects the highest-confidence N images
+Reads labels/3-2_meta/<run_id>_predictions.csv, selects the highest-confidence N images
 and lowest-confidence M images, draws their YOLO boxes on the originals, and saves
-annotated copies plus a CSV summary under labels/viz/<run_id>/.
+annotated copies plus a CSV summary under labels/3-3_viz/<run_id>/.
 """
 from __future__ import annotations
 
@@ -22,22 +22,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--images",
         type=Path,
-        help="Path to filtered images root (default: data/filtered/<run_id>).",
+        help="Path to filtered images root (default: data/2_filtered/<run_id>).",
     )
     parser.add_argument(
         "--labels",
         type=Path,
-        help="Path to YOLO label root (default: labels/yolo/<run_id>).",
+        help="Path to YOLO label root (default: labels/3-1_yolo_auto/<run_id>).",
     )
     parser.add_argument(
         "--predictions",
         type=Path,
-        help="Path to predictions CSV (default: labels/meta/<run_id>_predictions.csv).",
+        help="Path to predictions CSV (default: labels/3-2_meta/<run_id>_predictions.csv).",
     )
     parser.add_argument(
         "--out",
         type=Path,
-        help="Directory to save visualizations (default: labels/viz/<run_id>).",
+        help="Directory to save visualizations (default: labels/3-3_viz/<run_id>).",
     )
     parser.add_argument("--top-n", type=int, default=2, help="Number of highest-confidence images to sample.")
     parser.add_argument("--bottom-n", type=int, default=3, help="Number of lowest-confidence images to sample.")
@@ -92,10 +92,10 @@ def draw_boxes(img_path: Path, label_path: Path, out_path: Path) -> None:
 
 def main() -> None:
     args = parse_args()
-    images_root = (args.images or (Path("data/filtered") / args.run_id)).resolve()
-    labels_root = (args.labels or (Path("labels/yolo") / args.run_id)).resolve()
-    predictions_csv = (args.predictions or (Path("labels/meta") / f"{args.run_id}_predictions.csv")).resolve()
-    out_dir = (args.out or (Path("labels/viz") / args.run_id)).resolve()
+    images_root = (args.images or (Path("data/2_filtered") / args.run_id)).resolve()
+    labels_root = (args.labels or (Path("labels/3-1_yolo_auto") / args.run_id)).resolve()
+    predictions_csv = (args.predictions or (Path("labels/3-2_meta") / f"{args.run_id}_predictions.csv")).resolve()
+    out_dir = (args.out or (Path("labels/3-3_viz") / args.run_id)).resolve()
 
     if not predictions_csv.exists():
         raise FileNotFoundError(f"Predictions CSV not found: {predictions_csv}")

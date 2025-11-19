@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        help="Destination folder for filtered images. Defaults to data/filtered/<run_id>.",
+        help="Destination folder for filtered images. Defaults to data/2_filtered/<run_id>.",
     )
     parser.add_argument(
         "--stats",
@@ -126,7 +126,7 @@ def main() -> None:
         raise FileNotFoundError(f"Input directory not found: {input_dir}")
 
     run_id = args.run_id or input_dir.name
-    output_dir = (args.output or (input_dir.parents[1] / "filtered" / run_id)).resolve()
+    output_dir = (args.output or (input_dir.parents[1] / "2_filtered" / run_id)).resolve()
     stats_path = (args.stats or (output_dir / "stats.yaml")).resolve()
 
     logging.info("Run ID: %s", run_id)

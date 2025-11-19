@@ -2,7 +2,7 @@
 """
 Prepare an export folder (no zip) for Label Studio/CVAT import.
 
-The script copies selected images into `data/exports/<run_id>/images`,
+The script copies selected images into `data/3_exports/<run_id>/images`,
 and writes `manifest.txt` listing the relative paths. Move the folder
 to the target storage and point Label Studio Local Files storage there.
 """
@@ -22,7 +22,7 @@ def parse_args() -> argparse.Namespace:
         "--images",
         type=Path,
         required=True,
-        help="Root directory containing images to label (e.g., data/filtered/<run_id>).",
+        help="Root directory containing images to label (e.g., data/2_filtered/<run_id>).",
     )
     parser.add_argument(
         "--image-list",
@@ -37,7 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        help="Destination directory (default: data/exports/<run_id>).",
+        help="Destination directory (default: data/3_exports/<run_id>).",
     )
     parser.add_argument("--overwrite", action="store_true", help="Remove output directory before copying.")
     parser.add_argument("--dry-run", action="store_true", help="List files without copying.")
@@ -84,7 +84,7 @@ def main() -> None:
     if not files:
         raise RuntimeError("No files found to package.")
 
-    output_dir = (args.output_dir or Path("data/exports") / args.run_id).resolve()
+    output_dir = (args.output_dir or Path("data/3_exports") / args.run_id).resolve()
     if output_dir.exists():
         if args.overwrite:
             shutil.rmtree(output_dir)

@@ -5,16 +5,15 @@ Filter and remap YOLO label IDs in-place (or to a separate directory).
 Usage examples:
   # Keep YOLO ID 45 and remap it to 0
   python scripts/filter_labels.py \
-    --labels labels/yolo/crawl_test_b \
+    --labels labels/3-1_yolo_auto/crawl_test_b \
     --keep-ids 45 \
     --remap-id 0
 
   # Drop COCO IDs 0-79, shift everything else down by 80 (80->0, 81->1, …)
   python scripts/filter_labels.py \
-    --labels labels/yolo_validated/crawl_test_b/labels \
+    --labels labels/4_yolo_validated/crawl_test_b/labels \
     --drop-below 80 \
     --shift-offset 80 \
-    --output labels/food_only/crawl_test_b
 """
 from __future__ import annotations
 

@@ -11,8 +11,10 @@ import argparse
 import json
 import csv
 import struct
+import copy
 from pathlib import Path
 from typing import Dict, List, Sequence
+from urllib.parse import quote
 
 try:
     from PIL import Image as PILImage
@@ -20,13 +22,24 @@ except ImportError:  # pragma: no cover
     PILImage = None
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate Label Studio JSON from YOLO labels.")
     parser.add_argument("--run-id", type=str, required=True, help="Run identifier (matching filtered images).")
-    parser.add_argument("--images", type=Path, required=True, help="Root images directory (data/filtered/<run_id>).")
-    parser.add_argument("--labels", type=Path, required=True, help="YOLO labels directory (labels/yolo/<run_id>).")
+    parser.add_argument(
+        "--images",
+        type=Path,
+        required=True,
+        help="Root images directory (data/2_filtered/<run_id>).",
+    )
+    parser.add_argument(
+        "--labels",
+        type=Path,
+        required=True,
+        help="YOLO labels directory (labels/3-1_yolo_auto/<run_id>).",
+    )
     parser.add_argument(
         "--manifest",
         type=Path,
@@ -35,13 +48,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        help="Output JSON path (default: data/exports/<run_id>/labelstudio.json).",
+        help="Output JSON path (default: data/3_exports/<run_id>/labelstudio.json).",
     )
     parser.add_argument(
         "--document-root",
         type=str,
-        default="/data/local-files/?d=",
-        help="URL prefix served by Label Studio (e.g., /data/local-files/?d=<run_id>/images/).",
+        help="Optional override for URL prefix served by Label Studio. If omitted, workspace-relative URLs are used.",
+    )
+    parser.add_argument(
+        "--local-prefix",
+        type=str,
+        default="workspace",
+        help="Subfolder mounted under /label-studio/data/local_storage (default: workspace).",
+    )
+    parser.add_argument(
+        "--copy-to-annotations",
+        action="store_true",
+        help="Also emit annotations mirroring predictions so boxes appear as completed labels.",
     )
     parser.add_argument("--from-name", default="label", help="RectangleLabels name from the project config.")
     parser.add_argument("--to-name", default="image", help="Image tag name from the project config.")
@@ -85,6 +108,31 @@ def load_label_map(path: Path | None) -> Dict[str, str]:
     if not mapping:
         raise RuntimeError(f"No entries parsed from label map {path}")
     return mapping
+
+
+def build_image_url(
+    img_path: Path,
+    rel_from_images: Path,
+    document_root: str | None,
+    local_prefix: str,
+) -> str:
+    if document_root:
+        doc_root = document_root
+        if "{path}" in doc_root:
+            return doc_root.replace("{path}", rel_from_images.as_posix())
+        if not doc_root.endswith(("/", "=")):
+            doc_root = f"{doc_root}/"
+        return f"{doc_root}{rel_from_images.as_posix()}"
+
+    try:
+        rel_project = img_path.relative_to(PROJECT_ROOT)
+    except ValueError as err:
+        raise RuntimeError(
+            f"Image path {img_path} must reside inside project root {PROJECT_ROOT} when --document-root is omitted."
+        ) from err
+    url_path = f"{local_prefix}/{rel_project.as_posix()}".lstrip("/")
+    encoded = quote(url_path, safe="/")
+    return f"/data/local-files/?d={encoded}"
 
 
 def _read_png_size(path: Path) -> tuple[int, int]:
@@ -217,14 +265,7 @@ def main() -> None:
     for idx, img_path in enumerate(selected_images):
         rel = img_path.relative_to(images_root)
         label_path = (labels_root / rel).with_suffix(".txt")
-        # Label Studio expects path relative to DOCUMENT_ROOT
-        doc_root = args.document_root
-        if "{path}" in doc_root:
-            data_image = doc_root.replace("{path}", rel.as_posix())
-        else:
-            if not doc_root.endswith(("/", "=")):
-                doc_root = f"{doc_root}/"
-            data_image = f"{doc_root}{rel.as_posix()}"
+        data_image = build_image_url(img_path, rel, args.document_root, args.local_prefix)
         img_w, img_h = read_image_size(img_path)
         boxes = load_yolo_boxes(
             label_path,
@@ -235,21 +276,28 @@ def main() -> None:
             label_map,
             f"{rel.stem}_{idx}",
         )
-        tasks.append(
-            {
-                "data": {"image": data_image},
-                "predictions": [
-                    {
-                        "model_version": "auto_label",
-                        "result": boxes,
-                    }
-                ]
-                if boxes
-                else [],
-            }
-        )
+        task_entry: dict = {
+            "data": {"image": data_image},
+            "predictions": [
+                {
+                    "model_version": "auto_label",
+                    "result": boxes,
+                }
+            ]
+            if boxes
+            else [],
+        }
+        if args.copy_to_annotations and boxes:
+            task_entry["annotations"] = [
+                {
+                    "result": copy.deepcopy(boxes),
+                    "was_cancelled": False,
+                    "ground_truth": False,
+                }
+            ]
+        tasks.append(task_entry)
 
-    default_output = Path("data/exports") / args.run_id / "labelstudio.json"
+    default_output = Path("data/3_exports") / args.run_id / "labelstudio.json"
     output_path = (args.output or default_output).resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as fp:
