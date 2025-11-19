@@ -23,19 +23,23 @@ dist/
 build/
 
 # Data outputs
-data/raw/
-data/filtered/
+data/1_raw/
+data/2_filtered/
+data/3_exports/
+data/5_datasets/
 data/splits/
 data/cache/
-data/exports/
-data/datasets/
 
 # Labels and models
-labels/yolo*/
-labels/yolo_validated*/
+labels/3-1_yolo_auto/
+labels/3-2_meta/
+labels/4_yolo_validated/
+labels/3-3_viz/
 labels/export*/
-labels/viz/
 models/
+!models/font/
+!models/font/NanumGothic.ttf
+!models/yolo11l.pt
 *.pt
 *.onnx
 
