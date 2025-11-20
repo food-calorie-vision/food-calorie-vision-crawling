@@ -99,7 +99,7 @@ def resolve_path(base: Path, candidate: Path) -> Path:
 def resolve_token(explicit: str | None) -> str:
     token = explicit or os.environ.get("LABEL_STUDIO_TOKEN")
     if not token:
-        token = getpass.getpass("Label Studio access token: ").strip()
+        token = getpass.getpass("Label Studio access token (입력 시 숨김 처리, Enter=취소): ").strip()
     if not token:
         raise RuntimeError("Label Studio token is required.")
     return token

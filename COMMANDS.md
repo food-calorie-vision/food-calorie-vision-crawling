@@ -9,13 +9,12 @@
 ```bash
 UV_CACHE_DIR=.uv-cache uv run python scripts/crawl_images_playwright.py \
   --run-id {run_id} \
-  --classes 기장 보리 조 \
-  --min_per_class 80 \
-  --max_per_class 120 \
-  --out data/1_raw/{run_id} \
-  --show-browser
+  {classes_flag} \
+  --min_per_class {min_per_class} \
+  --max_per_class {max_per_class} \
+  --out data/1_raw {crawl_extra_flags}
 ```
-- `--limit` 또는 `--dry-run`으로 테스트 가능합니다.
+- 인터랙티브 모드에서는 `/run 1` 실행 시 클래스, CSV 경로, 최소/최대 장수, 브라우저 표시, limit 등을 입력받아 위 옵션이 자동으로 채워집니다. `--limit`과 `--dry-run`은 필요 시 직접 지정하세요.
 
 ## 2. Cleanup (Icons + Dedup)
 ```bash
@@ -108,6 +107,8 @@ python scripts/prepare_food_dataset.py \
   --run-id {run_id} \
   --source labels/4_export_from_studio/{run_id}/source \
   --image-root data/2_filtered/{run_id} \
+  --source-classes labels/4_export_from_studio/{run_id}/source/classes.txt \
+  --master-classes food_class_pre_label.csv \
   --label-map food_class_after_label.csv \
   --copy-mode hardlink \
   --val-ratio 0.3 \
@@ -119,9 +120,9 @@ python scripts/plan_train_subset.py \
   --dataset-dir data/5_datasets/{run_id} \
   --output data/meta/{run_id}_exclude.txt
 ```
-- 이 단계는 baseline 데이터셋을 확정하는 용도로만 사용하며, `prepare_food_dataset.py` 호출 시 항상 `--overwrite`를 포함해 기존 `data/5_datasets/{run_id}`를 재생성합니다. 이후 AL 패키징은 `/run 13`을 통해 별도 run_id(`{run_id}_r2` 등)로 관리하세요.
+- 이 단계는 baseline 데이터셋을 확정하는 용도로만 사용하며, Label Studio와 Master DB의 클래스 ID 불일치 문제를 해결하는 재맵핑(re-mapping)을 수행합니다. `prepare_food_dataset.py` 호출 시 항상 `--overwrite`를 포함해 기존 `data/5_datasets/{run_id}`를 재생성합니다. 이후 AL 패키징은 `/run 13`을 통해 별도 run_id(`{run_id}_r2` 등)로 관리하세요.
 - 동일 파티션이라면 `--copy-mode hardlink`로 디스크 사용량을 줄이세요. 다른 파티션일 경우 자동으로 copy2 모드가 사용됩니다.
-- 최초 패키징 시에는 `--val-ratio`로 train/val split을 생성해 `data/5_datasets/{run_id}/train.txt`와 `val.txt`를 만듭니다. 이후 Active Learning에서는 14번 항목을 사용해 `val.txt`를 고정한 채 train 목록만 갱신하세요.
+- 최초 패키징 시에는 `--val-ratio`로 train/val split을 생성해 `data/5_datasets/{run_id}/train.txt`와 `val.txt`를 만듭니다. 이후 Active Learning에서는 13번 항목을 사용해 `val.txt`를 고정한 채 train 목록만 갱신하세요.
 - 두 번째 명령인 `plan_train_subset.py`는 방금 생성된 `train.txt`를 읽어 클래스별 이미지 수를 표시한 뒤 “모든 클래스에서 제외할 장수”를 한 번만 입력받아 `data/meta/{run_id}_exclude.txt`를 생성합니다. 기본적으로 `train.txt`는 수정되지 않으며, 필요 시 `--update-train` 플래그를 추가해 갱신할 수 있습니다. 제외를 원치 않으면 Enter를 눌러 0으로 두면 됩니다.
 - 추후 manifest 기반 제어가 필요하면 `--val-list`, `--train-include`, `--train-exclude`를 추가로 지정할 수 있습니다.
 
@@ -155,6 +156,8 @@ python scripts/prepare_food_dataset.py \
   --run-id {run_id} \
   --source labels/4_export_from_studio/{base_run_id}/source \
   --image-root data/2_filtered/{base_run_id} \
+  --source-classes labels/4_export_from_studio/{base_run_id}/source/classes.txt \
+  --master-classes food_class_pre_label.csv \
   --label-map food_class_after_label.csv \
   --copy-mode hardlink \
   --val-list data/5_datasets/{base_run_id}/val.txt \

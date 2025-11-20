@@ -8,27 +8,28 @@ dataset:
 
 training:
   model: models/yolo11l.pt
-  epochs: 20
-  batch_size: 64
+  epochs: 1
+  batch_size: 8
   img_size: 640
   optimizer: SGD
   lr0: 0.01
   momentum: 0.937
   lrf: 0.003
   weight_decay: 0.0005
-  patience: 10
+  workers: 3
+  patience: 30
 
 augmentation:
-  hsv_h: 0.025        # 기본(0.015)보다 살짝 강한 편이지만 괜찮음
+  hsv_h: 0.02        # 기본(0.015)보다 살짝 강한 편이지만 괜찮음
   hsv_s: 0.2          # ±20% 정도
   hsv_v: 0.1          # 밝기/노출 ±10% 느낌, 의도랑 비슷
   flipud: 0.0         # 세로 플립 끈 거
   fliplr: 0.5         # 가로 플립 50%
-  degrees: 15.0       # ±15도 회전
-  shear: 5.0          # 가로/세로 ±5도
+  degrees: 10      # ±10도 회전
+  shear: 3.0          # 가로/세로 ±3도
   scale: 0.1          # 대략 0.9~1.1배 스케일 → 10% 줌 느낌
   crop_fraction: 0.9  # 최소 90% 유지 → 최대 10% 크롭
-  mosaic: 0.6         # 모든 배치에 모자이크
+  mosaic: 0.3         # 배치에 모자이크
 
 logging:
   output_dir: models/runs

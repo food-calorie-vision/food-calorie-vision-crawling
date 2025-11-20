@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import json
 import os
 from pathlib import Path
@@ -27,6 +28,11 @@ YOLO_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("YOLO_CONFIG_DIR", str(YOLO_CONFIG_DIR.resolve()))
 
 from ultralytics import YOLO  # type: ignore
+
+try:
+    import torch
+except Exception:  # pragma: no cover
+    torch = None  # type: ignore
 
 
 def parse_args() -> argparse.Namespace:
@@ -303,6 +309,13 @@ def main() -> None:
             print("[warn] Could not resolve class names; skipping per-class exports.")
 
     print("[done] Training run complete.")
+    if torch and torch.cuda.is_available():
+        try:
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] Failed to clear CUDA cache: {exc}")
+    gc.collect()
 
 
 if __name__ == "__main__":

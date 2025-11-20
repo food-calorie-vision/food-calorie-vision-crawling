@@ -276,6 +276,10 @@ class PipelineRunner:
             str(self.validated_dir),
             "--image-root",
             str(self.filtered_dir),
+            "--source-classes",
+            str(self.validated_dir / "classes.txt"),
+            "--master-classes",
+            str(self.opts.postprocess_label_map),
             "--label-map",
             str(self.opts.package_label_map),
             "--output-root",
@@ -384,6 +388,9 @@ def apply_context(text: str, context: Dict[str, str]) -> str:
 def set_context_value(context: Dict[str, str], key: str, raw_value: str) -> bool:
     value = (raw_value or "").strip()
     if not value:
+        if key == "train_model_flag":
+            context[key] = ""
+            return True
         print(f"{key} 값이 없어 명령 실행을 건너뜁니다.")
         return False
     if key == "run_id" and any(char in value for char in INVALID_RUN_ID_CHARS):
@@ -397,6 +404,9 @@ def ensure_context_placeholders(text: str, context: Dict[str, str]) -> bool:
     placeholders = re.findall(r"{([^{}]+)}", text)
     missing = [key for key in placeholders if not context.get(key)]
     for key in missing:
+        if key == "train_model_flag":
+            context[key] = ""
+            continue
         prompt = f"{key} 값 입력 (Enter=취소): "
         try:
             value = input(prompt)
@@ -468,8 +478,9 @@ def compute_next_al_run_id(
     pattern = re.compile(rf"^{re.escape(base_run_id)}_r(\d+)$")
     max_suffix = 1
     if current_run_id:
+        current_path = dataset_root / current_run_id
         match = pattern.match(current_run_id)
-        if match:
+        if match and current_path.exists():
             max_suffix = max(max_suffix, int(match.group(1)))
     if dataset_root.exists():
         for entry in dataset_root.iterdir():
@@ -480,13 +491,14 @@ def compute_next_al_run_id(
     return f"{base_run_id}_r{next_suffix}"
 
 
-def run_interactive_menu() -> None:
+def run_interactive_menu(defaults: PipelineOptions | None = None) -> None:
     root = Path(__file__).resolve().parents[1]
     commands_md = root / "COMMANDS.md"
     sections = load_command_sections(commands_md)
     if not sections:
         print("COMMANDS.md 파일을 찾을 수 없습니다. README.md를 참고하세요.")
-    context: Dict[str, str] = {"run_id": "", "ls_project_id": ""}
+    context: Dict[str, str] = {"run_id": "", "ls_project_id": "", "train_model_flag": ""}
+    context["initial_run_id"] = ""
     try:
         initial = input("초기 run_id (없으면 Enter): ").strip()
     except (EOFError, KeyboardInterrupt):
@@ -496,7 +508,21 @@ def run_interactive_menu() -> None:
             print("run_id 초기값이 설정되지 않았습니다. /set run_id <값>으로 다시 지정하세요.")
         else:
             context.setdefault("base_run_id", context["run_id"])
-            context.setdefault("default_run_id", context["run_id"])
+            context["initial_run_id"] = context["run_id"]
+    if defaults:
+        if defaults.run_id and "default_run_id" not in context:
+            context["default_run_id"] = defaults.run_id
+        if defaults.run_id and "base_run_id" not in context:
+            context["base_run_id"] = defaults.run_id
+    default_classes_flag = "--classes 기장 보리 조"
+    if defaults and defaults.classes:
+        default_classes_flag = "--classes " + " ".join(defaults.classes)
+    elif defaults and defaults.classes_csv:
+        default_classes_flag = f'--classes-csv "{defaults.classes_csv}"'
+    context.setdefault("classes_flag", default_classes_flag)
+    context.setdefault("min_per_class", str(defaults.min_per_class if defaults else 80))
+    context.setdefault("max_per_class", str(defaults.max_per_class if defaults else 120))
+    context.setdefault("crawl_extra_flags", "--show-browser" if (defaults is None or defaults.crawl_show_browser) else "")
     print("인터랙티브 명령 안내입니다. 번호를 입력하면 명령을 확인하고, /run <번호>로 실제 실행, /set run_id <값>으로 갱신, /exit 로 종료하세요.")
     python_exec = shlex.quote(str(Path(sys.executable)))
     env_cache: Dict[str, str] = {}
@@ -565,6 +591,43 @@ def run_interactive_menu() -> None:
             parent_dataset_run: str | None = None
             parent_dataset_hash: str | None = None
 
+            if command_number == "1":
+                class_flag_default = context.get("classes_flag", "--classes 기장 보리 조")
+                run_context.setdefault("classes_flag", class_flag_default)
+                run_context.setdefault("min_per_class", context.get("min_per_class", "80"))
+                run_context.setdefault("max_per_class", context.get("max_per_class", "120"))
+                run_context.setdefault("crawl_extra_flags", context.get("crawl_extra_flags", "--show-browser"))
+
+                class_input = input("수집할 클래스 입력 (공백 구분, Enter=CSV 사용): ").strip()
+                if class_input:
+                    run_context["classes_flag"] = "--classes " + class_input
+                else:
+                    csv_default = defaults.classes_csv if (defaults and defaults.classes_csv) else "target_food.csv"
+                    csv_path = input(f"클래스 CSV 경로 (Enter={csv_default}): ").strip() or str(csv_default)
+                    run_context["classes_flag"] = f'--classes-csv "{csv_path}"'
+
+                min_default = run_context["min_per_class"]
+                min_input = input(f"클래스당 최소 이미지 수 (Enter={min_default}): ").strip()
+                if min_input:
+                    run_context["min_per_class"] = min_input
+
+                max_default = run_context["max_per_class"]
+                max_input = input(f"클래스당 최대 이미지 수 (Enter={max_default}): ").strip()
+                if max_input:
+                    run_context["max_per_class"] = max_input
+
+                flags: List[str] = []
+                show_ans = input("크롤 시 브라우저 표시할까요? (Y/n): ").strip().lower()
+                if show_ans in {"", "y", "yes"}:
+                    flags.append("--show-browser")
+                limit_input = input("전체 다운로드 한도 (Enter=제한 없음): ").strip()
+                if limit_input.isdigit():
+                    flags.append(f"--limit {limit_input}")
+                start_from = input("특정 클래스부터 시작 (Enter=전체): ").strip()
+                if start_from:
+                    flags.append(f'--start-from "{start_from}"')
+                run_context["crawl_extra_flags"] = " ".join(flags)
+
             if command_number in {"13", "14"}:
                 base_run_id = context.get("base_run_id") or context.get("run_id")
                 if not base_run_id:
@@ -602,7 +665,13 @@ def run_interactive_menu() -> None:
             if command_number == "11":
                 dataset_root = root / "data" / "5_datasets"
                 base_run_id = context.get("base_run_id")
-                default_run = context.get("default_run_id") or context.get("run_id") or base_run_id or ""
+                default_run = (
+                    context.get("initial_run_id")
+                    or context.get("default_run_id")
+                    or context.get("run_id")
+                    or base_run_id
+                    or ""
+                )
                 selected_run: str | None = None
 
                 available_runs: List[str] = []
@@ -725,8 +794,14 @@ def run_interactive_menu() -> None:
                         print("[info] 사용자 확인으로 동일한 데이터셋을 유지합니다.")
             if command_number == "11":
                 context["run_id"] = run_context.get("run_id", context.get("run_id"))
+                context["train_model_flag"] = run_context.get("train_model_flag", context.get("train_model_flag", ""))
             if command_number == "12":
                 context["run_id"] = run_context.get("run_id", context.get("run_id"))
+            if command_number == "1":
+                context["classes_flag"] = run_context.get("classes_flag", context.get("classes_flag", ""))
+                context["min_per_class"] = run_context.get("min_per_class", context.get("min_per_class", "80"))
+                context["max_per_class"] = run_context.get("max_per_class", context.get("max_per_class", "120"))
+                context["crawl_extra_flags"] = run_context.get("crawl_extra_flags", context.get("crawl_extra_flags", ""))
         else:
             print("알 수 없는 입력입니다. /help 로 목록을 보거나 /exit 로 종료하세요.")
 
@@ -842,7 +917,7 @@ def parse_args() -> PipelineOptions:
 def main() -> None:
     options = parse_args()
     if options.interactive:
-        run_interactive_menu()
+        run_interactive_menu(options)
         return
     runner = PipelineRunner(options)
     runner.run()

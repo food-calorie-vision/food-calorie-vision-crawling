@@ -131,6 +131,8 @@ def main() -> None:
             ensure_dir(dest_path.parent)
             with dest_path.open("w", encoding="utf-8") as fp:
                 fp.write(f"{class_id} {largest[0]:.6f} {largest[1]:.6f} {largest[2]:.6f} {largest[3]:.6f}\n")
+        else:
+            logging.info("[dry-run] Would write %s -> class_id=%s", rel, class_id)
         processed += 1
 
     logging.info("Processed %d label files (skipped %d). Output: %s", processed, skipped, output_root)
