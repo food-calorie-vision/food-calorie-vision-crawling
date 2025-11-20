@@ -69,14 +69,14 @@ def load_class_names(dataset_dir: Path) -> List[str]:
 
 
 def resolve_class_name(rel_path: Path, labels_dir: Path, class_names: List[str]) -> str:
-    # rel_path can be 'images/foo.jpg'. The label is at 'labels/foo.txt'.
-    # Strip the leading 'images/' directory if it exists.
-    if rel_path.parts and rel_path.parts[0] == "images":
-        label_rel_path = Path(*rel_path.parts[1:])
-    else:
-        label_rel_path = rel_path
-
-    label_path = (labels_dir / label_rel_path).with_suffix(".txt")
+    # rel_path can be 'f067da90__햄버거_0001.jpg'
+    # We need to find '.../labels/f067da90__햄버거_0001.txt'
+    
+    # Get the path components without the image extension
+    label_stem = rel_path.with_suffix('')
+    
+    label_path = (labels_dir / label_stem).with_suffix(".txt")
+    
     class_id = -1
     if label_path.exists():
         with label_path.open("r", encoding="utf-8") as fp:

@@ -3,19 +3,23 @@
 Convert validated YOLO labels into a food-only dataset directory.
 
 Workflow:
-1. Point --source at Label Studio export (must contain images/ and labels/).
-2. Copy (or hardlink with --copy-mode) images into data/5_datasets/<run_id>/images.
-3. Filter label txt files (drop COCO IDs, shift IDs) into .../labels.
-4. Optionally create train/val split lists (--val-ratio) or reuse manifests (--val-list/--train-include/--train-exclude),
-   then write classes.txt + dataset.yaml.
+1.  Point --source at Label Studio export (must contain images/ and labels/).
+2.  Use mapping files to translate Label Studio class IDs to final categories.
+    - --source-classes: classes.txt from the LS export (maps LS index to name).
+    - --master-classes: food_class_pre_label.csv (maps name to a master ID).
+    - --label-map: food_class_after_label.csv (maps master ID to the final category name).
+3.  Copy (or hardlink) images into data/5_datasets/<run_id>/images.
+4.  Create new label files in .../labels with the final category IDs.
+5.  Optionally create train/val split lists, then write classes.txt + dataset.yaml.
 
 Example:
   python scripts/prepare_food_dataset.py \
-    --run-id crawl_test_b \
-    --source labels/4_yolo_validated/crawl_test_b \
+    --run-id crawl_test_b_remapped \
+    --source labels/4_export_from_studio/crawl_test_b/source \
+    --source-classes labels/4_export_from_studio/crawl_test_b/source/classes.txt \
+    --master-classes food_class_pre_label.csv \
     --label-map food_class_after_label.csv \
-    --drop-below 80 \
-    --shift-offset 80 \
+    --image-root data/1_raw/crawl_test_b \
     --val-ratio 0.2 \
     --overwrite
 """
@@ -31,103 +35,209 @@ from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 from urllib.parse import unquote
 
-
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Package validated or filtered labels into a food-only YOLO dataset.")
-    parser.add_argument("--run-id", required=True, help="Run identifier (used for output folder naming).")
+    parser.add_argument('--run-id', required=True, help='Run identifier (used for output folder naming).')
     parser.add_argument(
-        "--source",
+        '--source',
         type=Path,
         required=True,
-        help="Directory containing validated export (images/ + labels/) or filtered labels (txt files).",
+        help='Directory containing validated export (images/ + labels/).',
     )
     parser.add_argument(
-        "--image-root",
+        '--source-classes',
         type=Path,
-        help="Optional directory containing images when --source has only label txt files (e.g., labels/food_only).",
+        required=True,
+        help='Path to the classes.txt file from the Label Studio export.',
     )
     parser.add_argument(
-        "--output-root",
+        '--master-classes',
+        type=Path,
+        required=True,
+        help='Path to the master class mapping file (e.g., food_class_pre_label.csv).',
+    )
+    parser.add_argument(
+        '--label-map',
+        type=Path,
+        required=True,
+        help='Path to the final category mapping CSV (e.g., food_class_after_label.csv).',
+    )
+    parser.add_argument(
+        '--image-root',
+        type=Path,
+        help='Optional directory containing images when --source has only label txt files.',
+    )
+    parser.add_argument(
+        '--output-root',
         type=Path,
         default=Path("data/5_datasets"),
-        help="Parent directory where the packaged dataset will live (default: data/5_datasets).",
-    )
-    parser.add_argument("--drop-below", type=int, help="Drop any class IDs lower than this value.")
-    parser.add_argument("--drop-above", type=int, help="Drop any class IDs higher than this value.")
-    parser.add_argument(
-        "--shift-offset",
-        type=int,
-        default=0,
-        help="Subtract this offset from remaining IDs (default: 0; set 80 for COCO).",
+        help='Parent directory where the packaged dataset will live (default: data/5_datasets).',
     )
     parser.add_argument(
-        "--label-map",
-        type=Path,
-        help="Optional CSV/TSV mapping of class_id,label_value (used for names list).",
+        '--overwrite',
+        action='store_true',
+        help='Remove existing output folder before writing.',
     )
     parser.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="Remove existing output folder before writing.",
+        '--copy-mode',
+        choices=['copy', 'hardlink'],
+        default='copy',
+        help='copy(기본) 또는 hardlink 방식으로 images/ 파일을 구성합니다. 하드링크는 동일 파티션에서만 작동합니다.',
     )
     parser.add_argument(
-        "--copy-mode",
-        choices=["copy", "hardlink"],
-        default="copy",
-        help="copy(기본) 또는 hardlink 방식으로 images/ 파일을 구성합니다. 하드링크는 동일 파티션에서만 작동합니다.",
-    )
-    parser.add_argument(
-        "--val-ratio",
+        '--val-ratio',
         type=float,
         default=0.0,
-        help="Optional fraction of samples to reserve for validation (writes train/val .txt lists).",
+        help='Optional fraction of samples to reserve for validation (writes train/val .txt lists).',
     )
     parser.add_argument(
-        "--val-list",
+        '--val-list',
         type=Path,
-        help="검증 세트를 고정하려면 이미지 경로 목록이 담긴 텍스트 파일을 지정합니다 (한 줄당 하나, 상대/절대 경로 모두 허용).",
+        help='검증 세트를 고정하려면 이미지 경로 목록이 담긴 텍스트 파일을 지정합니다.',
     )
     parser.add_argument(
-        "--train-include",
+        '--train-include',
         type=Path,
-        help="이 파일에 명시된 이미지(상대 경로/절대 경로)가 train 목록에 반드시 포함되도록 강제합니다.",
+        help='이 파일에 명시된 이미지가 train 목록에 반드시 포함되도록 강제합니다.',
     )
     parser.add_argument(
-        "--train-exclude",
+        '--train-exclude',
         type=Path,
-        help="이 파일에 명시된 이미지는 train 목록에서 제외합니다 (validation에는 영향 없음).",
+        help='이 파일에 명시된 이미지는 train 목록에서 제외합니다.',
     )
+    # Deprecated arguments, kept for compatibility but ignored
+    parser.add_argument('--drop-below', type=int, help=argparse.SUPPRESS)
+    parser.add_argument('--drop-above', type=int, help=argparse.SUPPRESS)
+    parser.add_argument('--shift-offset', type=int, help=argparse.SUPPRESS)
     return parser.parse_args()
 
 
-def load_label_map(path: Path | None) -> Dict[int, str]:
-    if path is None:
-        return {}
+def load_label_map_by_id(path: Path) -> Dict[int, str]:
     delimiter = "," if path.suffix.lower() != ".tsv" else "\t"
     mapping: Dict[int, str] = {}
     with path.open("r", encoding="utf-8") as fp:
         reader = csv.reader(fp, delimiter=delimiter)
+        header = next(reader, None)  # Skip header
+        if header and header[0].lower() in {"", "id", "class_id"}:
+            pass
+        else:
+            # No header, reset file pointer
+            fp.seek(0)
+
         for row in reader:
-            if not row:
+            if not row or len(row) < 2:
                 continue
-            key = row[0].strip()
-            value = ""
-            extra = ""
-            if len(row) > 1:
-                value = row[1].strip()
-            if len(row) > 2:
-                extra = row[2].strip()
-            if key.lower() in {"id", "class_id"}:
+            key, value = row[0].strip(), row[1].strip()
+            if not key.isdigit():
                 continue
-            try:
-                mapping[int(key)] = value or extra or key
-            except ValueError:
-                continue
+            mapping[int(key)] = value
     return mapping
 
+
+def load_master_classes(path: Path) -> Dict[str, int]:
+    """Loads mapping from class name to master ID."""
+    mapping: Dict[str, int] = {}
+    with path.open("r", encoding="utf-8") as fp:
+        reader = csv.reader(fp)
+        header = next(reader, None)
+        if header and header[0].lower() == "id":
+             pass
+        else:
+            fp.seek(0)
+        for row in reader:
+            if not row or len(row) < 2:
+                continue
+            master_id, name = row[0].strip(), row[1].strip()
+            if not master_id.isdigit():
+                continue
+            mapping[name] = int(master_id)
+    return mapping
+
+def load_source_classes(path: Path) -> Dict[int, str]:
+    """Loads the classes.txt from Label Studio export."""
+    with path.open("r", encoding="utf-8") as fp:
+        return {i: line.strip() for i, line in enumerate(fp) if line.strip()}
+
+
+def remap_and_process_labels(
+    src_labels: Path,
+    dst_labels: Path,
+    ls_idx_to_name: Dict[int, str],
+    name_to_master_id: Dict[str, int],
+    master_id_to_category: Dict[int, str],
+) -> Tuple[Dict[int, str], Dict[Path, int]]:
+    """
+    Remaps labels from LS index to final category index and writes new label files.
+    """
+    # 1. Get the set of all possible final category names
+    all_final_categories = sorted(list(set(master_id_to_category.values())))
+
+    # 2. Create the final mapping from category name to final YOLO ID
+    category_to_final_id = {name: i for i, name in enumerate(all_final_categories)}
+    final_id_to_category = {i: name for name, i in category_to_final_id.items()}
+
+    image_class_map: Dict[Path, int] = {}
+    dst_labels.mkdir(parents=True, exist_ok=True)
+
+    for label_file in sorted(src_labels.rglob("*.txt")):
+        if not label_file.is_file():
+            continue
+
+        with label_file.open("r", encoding="utf-8") as fp:
+            lines = fp.readlines()
+
+        remapped_lines = []
+        assigned_class = -1
+        for line in lines:
+            parts = line.strip().split()
+            if len(parts) != 5:
+                continue
+
+            try:
+                ls_idx = int(parts[0])
+                ls_name = ls_idx_to_name.get(ls_idx)
+                if ls_name is None:
+                    print(f"[warn] Unknown LS class index '{ls_idx}' in {label_file}. Skipping line.")
+                    continue
+
+                master_id = name_to_master_id.get(ls_name)
+                if master_id is None:
+                    print(f"[warn] LS class name '{ls_name}' not found in master class list. Skipping line.")
+                    continue
+
+                category_name = master_id_to_category.get(master_id)
+                if category_name is None:
+                    print(f"[warn] Master ID '{master_id}' for '{ls_name}' not found in final category map. Skipping line.")
+                    continue
+
+                final_id = category_to_final_id.get(category_name)
+                if final_id is None:
+                    # This should not happen if logic is correct
+                    print(f"[error] Category '{category_name}' not found in final ID map. This is a bug.")
+                    continue
+
+                parts[0] = str(final_id)
+                remapped_lines.append(" ".join(parts))
+                if assigned_class == -1:
+                    assigned_class = final_id
+            except (ValueError, IndexError):
+                continue
+
+        if remapped_lines:
+            rel = label_file.relative_to(src_labels)
+            target_path = dst_labels / rel
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            with target_path.open("w", encoding="utf-8") as fp:
+                fp.write("\n".join(remapped_lines) + "\n")
+
+            rel_key = rel.with_suffix("")
+            if assigned_class != -1:
+                image_class_map[rel_key] = assigned_class
+
+    return final_id_to_category, image_class_map
 
 def _candidate_name_parts(stem: str) -> List[Path]:
     candidates: List[Path] = []
@@ -163,7 +273,7 @@ def materialize_image(src: Path, dst: Path, mode: str) -> None:
             os.link(src, dst)
             return
         except OSError as exc:
-            print(f"[warn] Hardlink 실패({exc}). copy2로 대체합니다.")
+            print(f"[warn] Hardlink 실패({{exc}}). copy2로 대체합니다.")
     shutil.copy2(src, dst)
 
 
@@ -177,40 +287,43 @@ def copy_images_for_labels(
     missing: List[str] = []
     source_lookup: Dict[Path, Path] = {}
 
+    print(f"Searching for images in: {images_src.resolve()}")
+    print(f"Reading labels from: {labels_root.resolve()}")
+
+    all_image_files = list(images_src.rglob("*"))
+    print(f"Found {len(all_image_files)} total files in image source.")
+
     for label_file in sorted(labels_root.rglob("*.txt")):
         if not label_file.is_file():
             continue
         rel = label_file.relative_to(labels_root)
-        rel_parent = rel.parent
         stem = label_file.stem
 
         image_path: Path | None = None
         candidate_names = _candidate_name_parts(stem)
-        for candidate_name in candidate_names:
-            candidate_parent = rel_parent / candidate_name.parent
-            base = candidate_name.name
+        
+        # More robust recursive search
+        for candidate_path in candidate_names:
+            base_name = candidate_path.name
+            # Find any file in the source tree that matches the base name, regardless of extension
             for ext in IMAGE_EXTS:
-                candidate = images_src / candidate_parent / f"{base}{ext}"
-                if candidate.exists():
-                    image_path = candidate
+                full_name = f"{base_name}{ext}"
+                for img_file in all_image_files:
+                    if img_file.name == full_name:
+                        image_path = img_file
+                        break
+                if image_path:
                     break
             if image_path:
                 break
-        if image_path is None:
-            # fallback: search entire image tree for matching filename
-            for candidate_name in candidate_names:
-                base = candidate_name.name
-                matches = list(images_src.rglob(f"{base}.*"))
-                match = next((m for m in matches if m.suffix.lower() in IMAGE_EXTS), None)
-                if match:
-                    image_path = match
-                    break
+
         if image_path is None:
             decoded_hint = candidate_names[-1].name if candidate_names else stem
             missing.append(decoded_hint)
             continue
 
-        dest_rel = rel.parent / f"{rel.stem}{image_path.suffix.lower()}"
+        # Use the label file's relative path for the destination to preserve structure
+        dest_rel = rel.with_suffix(image_path.suffix.lower())
         dest_path = images_dst / dest_rel
         materialize_image(image_path, dest_path, copy_mode)
         copied.append(dest_rel)
@@ -220,26 +333,18 @@ def copy_images_for_labels(
         print(f"[warn] Missing images for {len(missing)} labels (first 3 shown): {missing[:3]}")
     return copied, source_lookup
 
-
 def normalize_compare_value(value: str) -> str:
     cleaned = value.strip()
-    if not cleaned:
+    if not cleaned or cleaned.startswith("#"):
         return ""
-    if cleaned.startswith("#"):
-        return ""
-    cleaned = cleaned.replace("\\", "/")
-    while "//" in cleaned:
-        cleaned = cleaned.replace("//", "/")
+    cleaned = cleaned.replace("\\", "/").replace("//", "/")
     while cleaned.startswith("./"):
         cleaned = cleaned[2:]
     return cleaned.strip()
 
-
 def load_manifest_entries(path: Path | None, remap_base: Path | None = None) -> List[str]:
-    if not path:
-        return []
-    if not path.exists():
-        print(f"[warn] Manifest 파일을 찾을 수 없어 건너뜀: {path}")
+    if not path or not path.exists():
+        if path: print(f"[warn] Manifest 파일을 찾을 수 없어 건너뜀: {path}")
         return []
     entries: List[str] = []
     with path.open("r", encoding="utf-8") as fp:
@@ -257,43 +362,31 @@ def load_manifest_entries(path: Path | None, remap_base: Path | None = None) -> 
             entries.append(normalized)
     return entries
 
-
-def add_candidate_variant(values: set[str], candidate: str) -> None:
-    normalized = normalize_compare_value(candidate)
-    if not normalized:
-        return
-    values.add(normalized)
-    # allow version without leading slash
-    if normalized.startswith("/"):
-        values.add(normalized.lstrip("/"))
-    if "/" in normalized and normalized.startswith("images/"):
-        values.add(normalized[len("images/") :])
-    stem_candidate = normalized
-    if "/" in normalized:
-        stem_candidate = normalized.split("/")[-1]
-    values.add(stem_candidate)
-    if "." in normalized.rsplit("/", 1)[-1]:
-        no_ext = normalized.rsplit(".", 1)[0]
-        values.add(no_ext)
-
-
 def build_candidate_keys(rel: Path, images_dst: Path, source_path: Path | None) -> set[str]:
+    del images_dst, source_path
     values: set[str] = set()
     rel_posix = rel.as_posix()
-    add_candidate_variant(values, rel_posix)
-    add_candidate_variant(values, f"images/{rel_posix}")
-    dst_abs = (images_dst / rel).resolve().as_posix()
-    add_candidate_variant(values, dst_abs)
-    if source_path:
-        add_candidate_variant(values, source_path.resolve().as_posix())
+    values.add(rel_posix)
+    values.add(f"images/{rel_posix}")
+    leaf = rel_posix.rsplit("/", 1)[-1]
+    values.add(leaf)
+    stem = leaf.rsplit(".", 1)[0] if "." in leaf else leaf
+    values.add(stem)
+    if "__" in leaf:
+        suffix = leaf.split("__", 1)[1]
+        values.add(suffix)
+        if "." in suffix:
+            values.add(suffix.rsplit(".", 1)[0])
+    if "__" in stem:
+        values.add(stem.split("__", 1)[1])
     return {entry for entry in values if entry}
 
 
 def build_candidate_lookup(rel_candidates: Dict[Path, set[str]]) -> Dict[str, List[Path]]:
-    lookup: Dict[str, List[Path]] = {}
+    lookup: Dict[str, List[Path]] = defaultdict(list)
     for rel, keys in rel_candidates.items():
         for key in keys:
-            lookup.setdefault(key, []).append(rel)
+            lookup[key].append(rel)
     return lookup
 
 
@@ -302,25 +395,20 @@ def match_manifest_entries(
     candidate_lookup: Dict[str, List[Path]],
     available: set[Path],
 ) -> Tuple[List[Path], List[str]]:
-    matched: List[Path] = []
-    unmatched: List[str] = []
+    matched, unmatched = [], []
     for entry in entries:
         normalized = normalize_compare_value(entry)
-        if not normalized:
-            continue
+        if not normalized: continue
+        
         choices = candidate_lookup.get(normalized, [])
-        chosen: Path | None = None
-        for rel in choices:
-            if rel in available:
-                chosen = rel
-                available.remove(rel)
-                break
+        chosen: Path | None = next((rel for rel in choices if rel in available), None)
+            
         if chosen:
             matched.append(chosen)
+            available.remove(chosen)
         else:
             unmatched.append(entry)
     return matched, unmatched
-
 
 def apply_manifest_filter(
     rel_paths: Sequence[Path],
@@ -330,344 +418,154 @@ def apply_manifest_filter(
 ) -> Tuple[List[Path], List[str]]:
     if not manifest_entries:
         return list(rel_paths), []
-    manifest_set = {normalize_compare_value(entry) for entry in manifest_entries if normalize_compare_value(entry)}
+    manifest_set = {normalize_compare_value(e) for e in manifest_entries}
     matched_entries: set[str] = set()
     result: List[Path] = []
     for rel in rel_paths:
         keys = rel_candidates.get(rel, set())
-        intersects = keys & manifest_set
+        intersects = keys.intersection(manifest_set)
+        if intersects:
+            matched_entries.update(intersects)
         if include:
             if intersects:
                 result.append(rel)
-                matched_entries.update(intersects)
         else:
-            if intersects:
-                matched_entries.update(intersects)
-                continue
-            result.append(rel)
-    unmatched = [entry for entry in manifest_entries if normalize_compare_value(entry) not in matched_entries]
+            if not intersects:
+                result.append(rel)
+    unmatched = [e for e in manifest_entries if normalize_compare_value(e) not in matched_entries]
     return result, unmatched
-
 
 def write_list_file(path: Path, rel_paths: Sequence[Path], images_root: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as fp:
         for rel in rel_paths:
-            abs_entry = (images_root / rel).resolve().as_posix()
-            fp.write(f"{abs_entry}\n")
-
-
-def filter_lines(
-    lines: Sequence[str],
-    drop_below: int | None,
-    drop_above: int | None,
-    shift_offset: int,
-) -> List[str]:
-    filtered: List[str] = []
-    for line in lines:
-        parts = line.strip().split()
-        if len(parts) != 5:
-            continue
-        try:
-            class_id = int(float(parts[0]))
-        except ValueError:
-            continue
-        if drop_below is not None and class_id < drop_below:
-            continue
-        if drop_above is not None and class_id > drop_above:
-            continue
-        new_id = class_id - shift_offset
-        if new_id < 0:
-            continue
-        parts[0] = str(new_id)
-        filtered.append(" ".join(parts))
-    return filtered
-
-
-def process_labels(
-    src: Path,
-    dst: Path,
-    drop_below: int | None,
-    drop_above: int | None,
-    shift_offset: int,
-    label_map: Dict[int, str],
-) -> Tuple[Dict[int, str], Dict[Path, int]]:
-    dst.mkdir(parents=True, exist_ok=True)
-    id_to_name: Dict[int, str] = {}
-    image_class_map: Dict[Path, int] = {}
-    for label_file in sorted(src.rglob("*.txt")):
-        if not label_file.is_file():
-            continue
-        rel = label_file.relative_to(src)
-        with label_file.open("r", encoding="utf-8") as fp:
-            lines = fp.readlines()
-        filtered = filter_lines(lines, drop_below, drop_above, shift_offset)
-        if not filtered:
-            continue
-        target_path = dst / rel
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        with target_path.open("w", encoding="utf-8") as fp:
-            fp.write("\n".join(filtered))
-            fp.write("\n")
-
-        rel_key = (rel.parent / rel.stem)
-        try:
-            assigned_class = int(filtered[0].split()[0])
-            image_class_map[rel_key] = assigned_class
-        except (IndexError, ValueError):
-            pass
-
-        for entry in filtered:
-            cls_id = int(entry.split()[0])
-            original_id = cls_id + shift_offset
-            # Prefer explicitly provided mappings for the shifted (new) ID so that
-            # label_map files referencing the post-drop IDs take precedence.
-            name = label_map.get(cls_id)
-            if name is None:
-                name = label_map.get(original_id, f"class_{cls_id}")
-            id_to_name[cls_id] = name
-    return id_to_name, image_class_map
-
-
-def reindex_class_ids(labels_dir: Path, id_to_name: Dict[int, str]) -> Tuple[Dict[int, str], Dict[int, int]]:
-    sorted_ids = sorted(id_to_name)
-    identity_map = {idx: idx for idx in sorted_ids}
-    if sorted_ids == list(range(len(sorted_ids))):
-        return id_to_name, identity_map
-
-    mapping = {old_id: new_idx for new_idx, old_id in enumerate(sorted_ids)}
-    for label_file in labels_dir.rglob("*.txt"):
-        if not label_file.is_file():
-            continue
-        with label_file.open("r", encoding="utf-8") as fp:
-            lines = fp.readlines()
-        rewritten = []
-        for line in lines:
-            parts = line.strip().split()
-            if len(parts) != 5:
-                continue
-            try:
-                cls = int(parts[0])
-            except ValueError:
-                continue
-            if cls not in mapping:
-                continue
-            parts[0] = str(mapping[cls])
-            rewritten.append(" ".join(parts))
-        if rewritten:
-            with label_file.open("w", encoding="utf-8") as fp:
-                fp.write("\n".join(rewritten))
-                fp.write("\n")
-
-    new_mapping = {mapping[old]: name for old, name in id_to_name.items()}
-    return new_mapping, mapping
-
+            fp.write(f"{(images_root / rel).resolve().as_posix()}\n")
 
 def write_classes_file(path: Path, id_to_name: Dict[int, str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as fp:
-        for cls_id in sorted(id_to_name):
-            fp.write(f"{id_to_name[cls_id]}\n")
-
+        for i in range(len(id_to_name)):
+            fp.write(f"{id_to_name[i]}\n")
 
 def write_dataset_yaml(path: Path, train_source: Path | str, val_source: Path | str, names: List[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-
     with path.open("w", encoding="utf-8") as fp:
         dataset_root = path.parent.resolve()
-        fp.write(f"path: {dataset_root}\n")
-
-        train_entry = str(train_source.resolve()) if isinstance(train_source, Path) else train_source
-        val_entry = str(val_source.resolve()) if isinstance(val_source, Path) else val_source
-
+        fp.write(f"path: {dataset_root.as_posix()}\n")
+        train_entry = train_source.resolve().as_posix() if isinstance(train_source, Path) else train_source
+        val_entry = val_source.resolve().as_posix() if isinstance(val_source, Path) else val_source
         fp.write(f"train: {train_entry}\n")
         fp.write(f"val: {val_entry}\n")
-        fp.write(f"test: \n\n")
-
-        # Classes
+        fp.write("test:\n\n")
         fp.write(f"nc: {len(names)}\n")
         fp.write(f"names: {names}\n")
-
 
 def stratified_split(
     rel_image_paths: Sequence[Path],
     val_ratio: float,
     class_assignments: Dict[Path, int],
 ) -> Tuple[List[Path], List[Path]]:
-    if not rel_image_paths or val_ratio <= 0.0 or val_ratio >= 1.0:
+    if not rel_image_paths or not (0 < val_ratio < 1):
         return list(rel_image_paths), []
 
-    groups: Dict[int, List[Path]] = defaultdict(list)
+    groups = defaultdict(list)
     for rel in sorted(rel_image_paths):
-        class_key = rel.with_suffix("")
-        cls_id = class_assignments.get(class_key, -1)
-        groups[cls_id].append(rel)
+        groups[class_assignments.get(rel.with_suffix(""), -1)].append(rel)
 
-    train_subset: List[Path] = []
-    val_subset: List[Path] = []
+    train_subset, val_subset = [], []
     for items in groups.values():
         if len(items) < 2:
             train_subset.extend(items)
             continue
-        class_val_count = max(1, int(round(len(items) * val_ratio)))
-        if class_val_count >= len(items):
-            class_val_count = len(items) - 1
-        if class_val_count <= 0:
-            train_subset.extend(items)
-            continue
-        val_subset.extend(items[-class_val_count:])
-        train_subset.extend(items[:-class_val_count])
-
-    if not val_subset or not train_subset:
-        total = len(rel_image_paths)
-        if total < 2:
-            return list(rel_image_paths), []
-        rel_sorted = sorted(rel_image_paths)
-        val_count = max(1, int(round(total * val_ratio)))
-        if val_count >= total:
-            val_count = total - 1
-        val_subset = rel_sorted[-val_count:]
-        train_subset = rel_sorted[:-val_count]
+        val_count = max(1, int(round(len(items) * val_ratio)))
+        val_subset.extend(items[-val_count:])
+        train_subset.extend(items[:-val_count])
+    
     return train_subset, val_subset
-
-    def _write_list(path: Path, subset: Sequence[Path]) -> None:
-        with path.open("w", encoding="utf-8") as fp:
-            for rel in subset:
-                fp.write(f"{(images_root / rel).resolve().as_posix()}\n")
-
-    _write_list(train_list, train_subset)
-    _write_list(val_list, val_subset)
-    return train_list, val_list
-
 
 def main() -> None:
     args = parse_args()
-
-    if args.val_list and args.run_id:
-        base_run_id = args.val_list.parent.name
-        if base_run_id == args.run_id:
-            print(f"[error] 'run_id'({args.run_id})와 'base_run_id'({base_run_id})가 동일합니다.")
-            print("        '--val-list'를 사용하는 액티브 러닝 단계에서는 'run_id'를 이전과 다른 새 이름으로 지정해야 합니다.")
-            print("        예: --run-id <이전_id>_r2")
-            sys.exit(1)
+    if args.val_list and args.run_id == args.val_list.parent.name:
+        print(f"[error] 'run_id'({args.run_id}) cannot be the same as the base run_id from '--val-list'.")
+        sys.exit(1)
 
     source_root = args.source.resolve()
-    images_src = source_root / "images"
+    images_src = (source_root / "images") if not args.image_root else args.image_root.resolve()
     labels_src = source_root / "labels"
-    source_is_structured = images_src.exists() and labels_src.exists()
-    if not source_is_structured:
-        labels_txt_root = source_root
-        if not args.image_root:
-            raise FileNotFoundError(
-                "When --source has only label txt files, provide --image-root pointing to the matching images."
-            )
-        images_src = args.image_root.resolve()
-        labels_src = source_root
-    else:
-        labels_txt_root = labels_src
-        if args.image_root:
-            images_src = args.image_root.resolve()
+    if not (source_root.exists() and labels_src.exists()):
+         raise FileNotFoundError(f"Source directory must contain a 'labels' subdirectory. Path not found: {labels_src}")
 
     dataset_dir = (args.output_root / args.run_id).resolve()
-    images_dst = dataset_dir / "images"
-    labels_dst = dataset_dir / "labels"
-
     if dataset_dir.exists() and args.overwrite:
         shutil.rmtree(dataset_dir)
     dataset_dir.mkdir(parents=True, exist_ok=True)
+    
+    images_dst = dataset_dir / "images"
+    labels_dst = dataset_dir / "labels"
 
+    # --- Remapping Logic ---
+    print("[map] Loading class mapping files...")
+    ls_idx_to_name = load_source_classes(args.source_classes)
+    name_to_master_id = load_master_classes(args.master_classes)
+    master_id_to_category = load_label_map_by_id(args.label_map)
+
+    print("[map] Remapping and processing label files...")
+    final_id_to_name, image_class_map = remap_and_process_labels(
+        labels_src, labels_dst, ls_idx_to_name, name_to_master_id, master_id_to_category
+    )
+    if not final_id_to_name:
+        raise RuntimeError("No labels remained after remapping. Check mapping files and source labels.")
+    print(f"[map] Remapped to {len(final_id_to_name)} final categories.")
+    
     print(f"[copy] Images (labels-linked) -> {images_dst}")
-    copied_images, source_lookup = copy_images_for_labels(
-        labels_txt_root,
-        images_src,
-        images_dst,
-        copy_mode=args.copy_mode,
-    )
-    print(f"[copy] Copied {len(copied_images)} images (skipped unlabeled files)")
-    label_map = load_label_map(args.label_map)
-    print("[filter] Processing label txt files...")
-    id_to_name, image_class_map = process_labels(
-        labels_txt_root,
-        labels_dst,
-        drop_below=args.drop_below,
-        drop_above=args.drop_above,
-        shift_offset=args.shift_offset,
-        label_map=label_map,
-    )
-    if not id_to_name:
-        raise RuntimeError("No labels remained after filtering. Check drop/shift parameters.")
-    id_to_name, reindex_map = reindex_class_ids(labels_dst, id_to_name)
-    image_class_map = {rel: reindex_map.get(cls, cls) for rel, cls in image_class_map.items()}
-    print(f"[filter] Remaining classes: {len(id_to_name)} (contiguous IDs enforced)")
+    copied_images, source_lookup = copy_images_for_labels(labels_dst, images_src, images_dst, args.copy_mode)
+    print(f"[copy] Copied {len(copied_images)} images.")
 
-    rel_candidates = {
-        rel: build_candidate_keys(rel, images_dst, source_lookup.get(rel)) for rel in copied_images
-    }
+    rel_candidates = {rel: build_candidate_keys(rel, images_dst, source_lookup.get(rel)) for rel in copied_images}
     candidate_lookup = build_candidate_lookup(rel_candidates)
 
     val_remap_base = args.val_list.resolve().parent if args.val_list else None
     train_relatives: List[Path] = list(copied_images)
     val_relatives: List[Path] = []
+    
     val_entries = load_manifest_entries(args.val_list, remap_base=val_remap_base)
     if val_entries:
-        val_relatives, unmatched_val = match_manifest_entries(
-            val_entries,
-            candidate_lookup,
-            set(train_relatives),
-        )
-        if unmatched_val:
-            print(f"[warn] {len(unmatched_val)} validation entries not found: {unmatched_val[:3]}")
-        if val_relatives:
-            val_rel_set = set(val_relatives)
-            train_relatives = [rel for rel in train_relatives if rel not in val_rel_set]
+        val_relatives, unmatched = match_manifest_entries(val_entries, candidate_lookup, set(train_relatives))
+        if unmatched: print(f"[warn] {len(unmatched)} validation entries not found: {unmatched[:3]}")
+        if val_relatives: train_relatives = [r for r in train_relatives if r not in set(val_relatives)]
     elif args.val_ratio > 0:
         train_relatives, val_relatives = stratified_split(train_relatives, args.val_ratio, image_class_map)
-        if not val_relatives:
-            print("[warn] val_ratio 적용에 필요한 표본이 부족해 validation split을 생성하지 못했습니다.")
 
     include_entries = load_manifest_entries(args.train_include, remap_base=val_remap_base)
-    train_relatives, unmatched_include = apply_manifest_filter(
-        train_relatives,
-        include_entries,
-        rel_candidates,
-        include=True,
-    )
-    if include_entries and unmatched_include:
-        print(f"[warn] train include 목록 중 {len(unmatched_include)}개를 찾지 못했습니다: {unmatched_include[:3]}")
+    if include_entries:
+        train_relatives, unmatched = apply_manifest_filter(train_relatives, include_entries, rel_candidates, include=True)
+        if unmatched: print(f"[warn] {len(unmatched)} train include entries not found: {unmatched[:3]}")
+
     exclude_entries = load_manifest_entries(args.train_exclude, remap_base=val_remap_base)
-    train_relatives, unmatched_exclude = apply_manifest_filter(
-        train_relatives,
-        exclude_entries,
-        rel_candidates,
-        include=False,
-    )
-    if exclude_entries and unmatched_exclude:
-        print(f"[warn] train exclude 목록 중 {len(unmatched_exclude)}개를 찾지 못했습니다: {unmatched_exclude[:3]}")
+    if exclude_entries:
+        train_relatives, unmatched = apply_manifest_filter(train_relatives, exclude_entries, rel_candidates, include=False)
+        if unmatched: print(f"[warn] {len(unmatched)} train exclude entries not found: {unmatched[:3]}")
 
     if not train_relatives:
-        raise RuntimeError("No training images remained after applying include/exclude filters.")
+        raise RuntimeError("No training images remained after applying filters.")
 
-    train_list: Path | None = None
-    val_list: Path | None = None
-    force_train_manifest = bool(val_relatives or include_entries or exclude_entries or val_entries or args.val_ratio > 0)
-    if force_train_manifest:
-        train_list = dataset_dir / "train.txt"
-        write_list_file(train_list, train_relatives, images_dst)
-        print(f"[split] train.txt -> {train_list} ({len(train_relatives)} images)")
+    train_list_path, val_list_path = None, None
+    if val_relatives or include_entries or exclude_entries:
+        train_list_path = dataset_dir / "train.txt"
+        write_list_file(train_list_path, train_relatives, images_dst)
+        print(f"[split] train.txt -> {train_list_path} ({len(train_relatives)} images)")
     if val_relatives:
-        val_list = dataset_dir / "val.txt"
-        write_list_file(val_list, val_relatives, images_dst)
-        print(f"[split] val.txt -> {val_list} ({len(val_relatives)} images)")
+        val_list_path = dataset_dir / "val.txt"
+        write_list_file(val_list_path, val_relatives, images_dst)
+        print(f"[split] val.txt -> {val_list_path} ({len(val_relatives)} images)")
 
     classes_path = dataset_dir / "classes.txt"
-    write_classes_file(classes_path, id_to_name)
+    write_classes_file(classes_path, final_id_to_name)
     print(f"[write] classes.txt -> {classes_path}")
 
     yaml_path = dataset_dir / f"{args.run_id}.yaml"
-    names_list = [id_to_name[idx] for idx in sorted(id_to_name)]
-    train_source = train_list or images_dst
-    val_source = val_list or images_dst
-    write_dataset_yaml(yaml_path, train_source, val_source, names_list)
+    names_list = [final_id_to_name[i] for i in sorted(final_id_to_name)]
+    write_dataset_yaml(yaml_path, train_list_path or images_dst, val_list_path or images_dst, names_list)
     print(f"[write] dataset yaml -> {yaml_path}")
 
     print("[done] Food-only dataset ready.")
