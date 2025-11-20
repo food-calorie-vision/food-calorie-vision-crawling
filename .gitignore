@@ -31,11 +31,7 @@ data/splits/
 data/cache/
 
 # Labels and models
-labels/3-1_yolo_auto/
-labels/3-2_meta/
-labels/4_yolo_validated/
-labels/3-3_viz/
-labels/export*/
+labels/
 models/
 !models/font/
 !models/font/NanumGothic.ttf
@@ -51,3 +47,6 @@ logs/
 # OS noise
 .DS_Store
 Thumbs.db
+
+data/label-studio/
+data/meta/

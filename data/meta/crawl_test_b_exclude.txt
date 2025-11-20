@@ -1,2 +1,0 @@
-/home/pollux/workspace/food-calorie-vision-modeling/food-calorie-vision-crawling/data/5_datasets/crawl_test_b/images/274f9e5f__%EC%82%BC%EA%B0%81%EA%B9%80%EB%B0%A5_0005.jpg
-/home/pollux/workspace/food-calorie-vision-modeling/food-calorie-vision-crawling/data/5_datasets/crawl_test_b/images/361aeace__%EA%B5%AD%EB%B0%A5_0003.jpg
