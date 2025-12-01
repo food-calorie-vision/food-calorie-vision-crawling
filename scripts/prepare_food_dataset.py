@@ -493,7 +493,18 @@ def main() -> None:
     images_src = (source_root / "images") if not args.image_root else args.image_root.resolve()
     labels_src = source_root / "labels"
     if not (source_root.exists() and labels_src.exists()):
-         raise FileNotFoundError(f"Source directory must contain a 'labels' subdirectory. Path not found: {labels_src}")
+        raise FileNotFoundError(f"Source directory must contain a 'labels' subdirectory. Path not found: {labels_src}")
+
+    try:
+        first_label = next(labels_src.rglob("*.txt"))
+    except StopIteration:
+        first_label = None
+    if first_label is None:
+        raise RuntimeError(
+            f"No YOLO label files were found under {labels_src}. "
+            "Label Studio export may not contain any approved annotations yet. "
+            "Complete validation (or re-export with --copy-to-annotations/--copy-predictions) before packaging."
+        )
 
     dataset_dir = (args.output_root / args.run_id).resolve()
     if dataset_dir.exists() and args.overwrite:

@@ -759,6 +759,23 @@ def run_interactive_menu(defaults: PipelineOptions | None = None) -> None:
                     continue
                 run_context["run_id"] = choice
 
+            if command_number == "8":
+                project_name = f"food-{run_context.get('run_id') or context.get('run_id') or '<run_id 미설정>'}"
+                print(
+                    "[warn] /run 8은 Label Studio 프로젝트를 삭제 후 재생성합니다.\n"
+                    f"       대상 프로젝트: {project_name}\n"
+                    "       기존에 검수/라벨링한 내용이 모두 사라집니다."
+                )
+                confirm_1 = input("정말 진행하시겠습니까? (y/N): ").strip().lower()
+                if confirm_1 not in {"y", "yes"}:
+                    print("[info] /run 8 실행을 취소했습니다.")
+                    continue
+                confirm_2 = input("한 번 더 확인합니다. 계속하려면 다시 y 입력: ").strip().lower()
+                if confirm_2 not in {"y", "yes"}:
+                    print("[info] /run 8 실행을 취소했습니다.")
+                    continue
+
+            command_failed = False
             for block in blocks:
                 if not ensure_context_placeholders(block, run_context):
                     continue
@@ -773,6 +790,10 @@ def run_interactive_menu(defaults: PipelineOptions | None = None) -> None:
                     subprocess.run(["bash", "-lc", prepared], check=True, env=env)
                 except subprocess.CalledProcessError as exc:
                     print(f"[run] 명령이 실패했습니다 (exit {exc.returncode}). 로그를 확인하세요.")
+                    command_failed = True
+                    break
+            if command_failed:
+                continue
             if command_number in {"13", "14"} and base_run_for_14:
                 context["base_run_id"] = context.get("base_run_id") or base_run_for_14
                 context["run_id"] = run_context.get("run_id", context.get("run_id"))

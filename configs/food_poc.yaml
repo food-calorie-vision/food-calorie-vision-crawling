@@ -8,16 +8,16 @@ dataset:
 
 training:
   model: models/yolo11l.pt
-  epochs: 1
+  epochs: 200
   batch_size: 8
   img_size: 640
   optimizer: SGD
-  lr0: 0.01
+  lr0: 0.001
   momentum: 0.937
   lrf: 0.003
   weight_decay: 0.0005
-  workers: 3
-  patience: 30
+  workers: 1
+  patience: 50
 
 augmentation:
   hsv_h: 0.02        # 기본(0.015)보다 살짝 강한 편이지만 괜찮음
